@@ -1,3 +1,4 @@
+from keepalive import keep_alive
 import os
 import discord
 from discord.ext import commands
