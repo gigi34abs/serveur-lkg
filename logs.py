@@ -8,7 +8,11 @@ LOGS_CHANNELS = {
     "message02": 1476233342771925053,   # Salon LOGS-message02 (Modifications)
     "salons": 1476233348052553869,      # Salon LOGS-salons (Création/Suppression)
     "roles": 1476233353450623068,       # Salon LOGS-roles (Création/Modif rôles)
-    "vocal": 1476233360601780358        # Salon LOGS-vocal
+    "vocal": 1476233360601780358,       # Salon LOGS-vocal
+    "mutes": 1497540093232283748,       # Nouveau : Mutes (Timeouts)
+    "kicks": 1497540650667610192,       # Nouveau : Exclusions
+    "bans": 1497540697115463761,        # Nouveau : Bannissements
+    "images": 1496522037081014362       # Nouveau : Logs Images
 }
 
 class Logs(commands.Cog):
@@ -26,11 +30,37 @@ class Logs(commands.Cog):
     @commands.Cog.listener()
     async def on_message_delete(self, message):
         if message.author.bot: return
+        
+        # Gestion des Images (Nouveau point demandé)
+        if message.attachments:
+            for attachment in message.attachments:
+                embed_img = discord.Embed(title="🖼️ Image Supprimée", color=discord.Color.dark_red(), timestamp=datetime.now())
+                embed_img.add_field(name="Auteur", value=message.author.mention)
+                embed_img.add_field(name="Salon", value=message.channel.mention)
+                embed_img.set_footer(text=f"ID du message: {message.id}")
+                # Note: On ne peut pas "récupérer" l'image elle-même si elle est supprimée des serveurs Discord, 
+                # mais on logge l'info qu'une image de nom {attachment.filename} a disparu.
+                embed_img.add_field(name="Fichier", value=attachment.filename)
+                await self.send_log("images", embed_img)
+
         embed = discord.Embed(title="🗑️ Message Supprimé", color=discord.Color.red(), timestamp=datetime.now())
         embed.add_field(name="Auteur", value=message.author.mention)
         embed.add_field(name="Salon", value=message.channel.mention)
         embed.add_field(name="Message", value=message.content or "Vide (Image/Fichier)", inline=False)
         await self.send_log("messages", embed)
+
+    # --- LOGS-IMAGES (ENVOI) ---
+    @commands.Cog.listener()
+    async def on_message(self, message):
+        if message.author.bot: return
+        if message.attachments:
+            for attachment in message.attachments:
+                if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg', 'gif', 'webp']):
+                    embed = discord.Embed(title="📸 Image Envoyée", color=discord.Color.blue(), timestamp=datetime.now())
+                    embed.add_field(name="Auteur", value=message.author.mention)
+                    embed.add_field(name="Salon", value=message.channel.mention)
+                    embed.set_image(url=attachment.url)
+                    await self.send_log("images", embed)
 
     # --- LOGS-MESSAGE02 (MODIFICATION) ---
     @commands.Cog.listener()
@@ -77,24 +107,19 @@ class Logs(commands.Cog):
             embed.add_field(name="Nouveau Nom", value=after.name)
             await self.send_log("roles", embed)
 
-    # --- LOGS-VOCAL (REJOINDRE/QUITTER/CHANGER/STATUT) ---
+    # --- LOGS-VOCAL ---
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
-        # 1. Connexion à un salon
         if before.channel is None and after.channel is not None:
             embed = discord.Embed(title="🎙️ Connexion Vocale", color=discord.Color.green(), timestamp=datetime.now())
             embed.add_field(name="Membre", value=member.mention)
-            embed.add_field(name="Salon", value=after.channel.mention) # mention du salon c'est plus joli
+            embed.add_field(name="Salon", value=after.channel.mention)
             await self.send_log("vocal", embed)
-
-        # 2. Déconnexion d'un salon
         elif before.channel is not None and after.channel is None:
             embed = discord.Embed(title="🔇 Déconnexion Vocale", color=discord.Color.red(), timestamp=datetime.now())
             embed.add_field(name="Membre", value=member.mention)
             embed.add_field(name="Salon quitté", value=before.channel.name)
             await self.send_log("vocal", embed)
-
-        # 3. Changement de salon
         elif before.channel is not None and after.channel is not None and before.channel != after.channel:
             embed = discord.Embed(title="🔄 Changement de Salon", color=discord.Color.blurple(), timestamp=datetime.now())
             embed.add_field(name="Membre", value=member.mention)
@@ -102,18 +127,57 @@ class Logs(commands.Cog):
             embed.add_field(name="À", value=after.channel.name, inline=True)
             await self.send_log("vocal", embed)
 
-        # 4. Changement de Statut Vocal (Correction pour Kokoro)
-        # On vérifie si l'utilisateur est dans le même salon mais que son texte de statut a changé
         if before.channel is not None and after.channel is not None and before.channel == after.channel:
-            # On compare les status (attribut de VoiceState)
             if before.status != after.status:
                 embed = discord.Embed(title="💬 Statut Vocal Modifié", color=discord.Color.gold(), timestamp=datetime.now())
                 embed.set_author(name=member.display_name, icon_url=member.display_avatar.url)
                 embed.add_field(name="Membre", value=member.mention)
                 embed.add_field(name="Ancien Statut", value=f"`{before.status}`" if before.status else "*Aucun*", inline=False)
                 embed.add_field(name="Nouveau Statut", value=f"`{after.status}`" if after.status else "*Aucun*", inline=False)
-                embed.add_field(name="Salon", value=after.channel.mention)
                 await self.send_log("vocal", embed)
+
+    # --- NOUVEAUX LOGS : MUTE, KICK, BAN ---
+
+    @commands.Cog.listener()
+    async def on_member_update(self, before, after):
+        # Log pour le MUTE (Timeout)
+        if before.timed_out_until != after.timed_out_until:
+            if after.timed_out_until is not None:
+                # L'utilisateur vient d'être mute
+                async for entry in after.guild.audit_logs(limit=1, action=discord.AuditLogAction.member_update):
+                    mod = entry.user
+                    reason = entry.reason or "Aucune raison"
+                
+                embed = discord.Embed(title="🔇 Membre Mute (Timeout)", color=discord.Color.orange(), timestamp=datetime.now())
+                embed.add_field(name="Cible", value=after.mention)
+                embed.add_field(name="Modérateur", value=mod.mention)
+                embed.add_field(name="Fin du mute", value=discord.utils.format_dt(after.timed_out_until, style='R'))
+                embed.add_field(name="Raison", value=reason, inline=False)
+                await self.send_log("mutes", embed)
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member):
+        # Log pour l'EXCLUSION (Kick)
+        async for entry in member.guild.audit_logs(limit=1, action=discord.AuditLogAction.kick):
+            if entry.target.id == member.id:
+                embed = discord.Embed(title="👢 Membre Exclu", color=discord.Color.red(), timestamp=datetime.now())
+                embed.add_field(name="Cible", value=f"{member} ({member.id})")
+                embed.add_field(name="Modérateur", value=entry.user.mention)
+                embed.add_field(name="Raison", value=entry.reason or "Aucune raison", inline=False)
+                await self.send_log("kicks", embed)
+                break
+
+    @commands.Cog.listener()
+    async def on_member_ban(self, guild, user):
+        # Log pour le BANNISSEMENT
+        async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.ban):
+            if entry.target.id == user.id:
+                embed = discord.Embed(title="🔨 Membre Banni", color=discord.Color.dark_red(), timestamp=datetime.now())
+                embed.add_field(name="Cible", value=f"{user} ({user.id})")
+                embed.add_field(name="Modérateur", value=entry.user.mention)
+                embed.add_field(name="Raison", value=entry.reason or "Aucune raison", inline=False)
+                await self.send_log("bans", embed)
+                break
 
 async def setup(bot):
     await bot.add_cog(Logs(bot))
