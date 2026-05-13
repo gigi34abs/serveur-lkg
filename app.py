@@ -26,7 +26,7 @@ flask_thread.start()
 
 # --- CHARGEMENT DES EXTENSIONS ---
 async def load_extensions():
-    extensions = ['points', 'clear', 'logs', 'ticket', 'admin', 'lock', 'regles', 'invite']
+    extensions = ['parler', 'points', 'clear', 'logs', 'ticket', 'admin', 'lock', 'regles', 'invite']
     for ext in extensions:
         try:
             await bot.load_extension(ext)
