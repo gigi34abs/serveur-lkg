@@ -1,183 +1,699 @@
 import discord
 from discord.ext import commands
-from datetime import datetime
+from datetime import datetime, timezone
+import aiohttp
+import asyncio
+import os
+import re
 
-# --- CONFIGURATION DES SALONS ---
+# =========================================================
+# CONFIGURATION
+# =========================================================
+
 LOGS_CHANNELS = {
-    "messages": 1476233336333799697,    # Salon LOGS-messages (Suppressions)
-    "message02": 1476233342771925053,   # Salon LOGS-message02 (Modifications)
-    "salons": 1476233348052553869,      # Salon LOGS-salons (Création/Suppression)
-    "roles": 1476233353450623068,       # Salon LOGS-roles (Création/Modif rôles)
-    "vocal": 1476233360601780358,       # Salon LOGS-vocal
-    "mutes": 1497540093232283748,       # Nouveau : Mutes (Timeouts)
-    "kicks": 1497540650667610192,       # Nouveau : Exclusions
-    "bans": 1497540697115463761,        # Nouveau : Bannissements
-    "images": 1496522037081014362       # Nouveau : Logs Images
+    "messages": 1476233336333799697,
+    "message_edit": 1476233342771925053,
+    "salons": 1476233348052553869,
+    "roles": 1476233353450623068,
+    "vocal": 1476233360601780358,
+    "mutes": 1497540093232283748,
+    "kicks": 1497540650667610192,
+    "bans": 1497540697115463761,
+    "images": 1496522037081014362,
+    "moderation": 1504072244366807040
 }
 
+SAVE_FOLDER = "saved_attachments"
+
+os.makedirs(SAVE_FOLDER, exist_ok=True)
+
+IMAGE_EXTENSIONS = (
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".mp4",
+    ".mov",
+    ".webm"
+)
+
+# =========================================================
+# INSULTES
+# =========================================================
+
+BAD_WORDS = {
+    "fdp",
+    "tg",
+    "ntm",
+    "pute",
+    "enculé",
+    "encule",
+    "connard",
+    "salope",
+    "batard",
+    "bâtard",
+    "nique",
+    "tamere",
+    "ta mère",
+    "ferme ta gueule"
+}
+
+# =========================================================
+# DOMAINES AUTORISÉS
+# =========================================================
+
+AUTHORIZED_DOMAINS = {
+    "youtube.com",
+    "youtu.be",
+    "tiktok.com",
+    "github.com"
+}
+
+LINK_REGEX = re.compile(
+    r"(https?://[^\s]+|www\.[^\s]+)",
+    re.IGNORECASE
+)
+
+DISCORD_INVITE_REGEX = re.compile(
+    r"(discord\.gg/|discord\.com/invite/)",
+    re.IGNORECASE
+)
+
+# =========================================================
+# COG
+# =========================================================
+
 class Logs(commands.Cog):
+
     def __init__(self, bot):
         self.bot = bot
+        self.message_cache = {}
 
-    async def send_log(self, channel_type, embed):
-        channel_id = LOGS_CHANNELS.get(channel_type)
-        if channel_id:
+    # =====================================================
+    # SEND LOG
+    # =====================================================
+
+    async def send_log(self, log_type, embed=None, files=None):
+
+        try:
+
+            channel_id = LOGS_CHANNELS.get(log_type)
+
+            if not channel_id:
+                return
+
             channel = self.bot.get_channel(channel_id)
-            if channel:
-                await channel.send(embed=embed)
 
-    # --- LOGS-MESSAGES (SUPPRESSION) ---
-    @commands.Cog.listener()
-    async def on_message_delete(self, message):
-        if message.author.bot: return
-        
-        # Gestion des Images (Nouveau point demandé)
-        if message.attachments:
-            for attachment in message.attachments:
-                embed_img = discord.Embed(title="🖼️ Image Supprimée", color=discord.Color.dark_red(), timestamp=datetime.now())
-                embed_img.add_field(name="Auteur", value=message.author.mention)
-                embed_img.add_field(name="Salon", value=message.channel.mention)
-                embed_img.set_footer(text=f"ID du message: {message.id}")
-                # Note: On ne peut pas "récupérer" l'image elle-même si elle est supprimée des serveurs Discord, 
-                # mais on logge l'info qu'une image de nom {attachment.filename} a disparu.
-                embed_img.add_field(name="Fichier", value=attachment.filename)
-                await self.send_log("images", embed_img)
+            if not channel:
+                return
 
-        embed = discord.Embed(title="🗑️ Message Supprimé", color=discord.Color.red(), timestamp=datetime.now())
-        embed.add_field(name="Auteur", value=message.author.mention)
-        embed.add_field(name="Salon", value=message.channel.mention)
-        embed.add_field(name="Message", value=message.content or "Vide (Image/Fichier)", inline=False)
-        await self.send_log("messages", embed)
+            await channel.send(
+                embed=embed,
+                files=files or []
+            )
 
-    # --- LOGS-IMAGES (ENVOI) ---
+        except Exception as e:
+            print(f"[LOG ERROR] {e}")
+
+    # =====================================================
+    # SAVE ATTACHMENTS
+    # =====================================================
+
+    async def save_attachment(self, attachment):
+
+        try:
+
+            filename = f"{attachment.id}_{attachment.filename}"
+            path = os.path.join(
+                SAVE_FOLDER,
+                filename
+            )
+
+            async with aiohttp.ClientSession() as session:
+
+                async with session.get(
+                    attachment.url
+                ) as response:
+
+                    if response.status == 200:
+
+                        with open(path, "wb") as f:
+                            f.write(
+                                await response.read()
+                            )
+
+            return path
+
+        except Exception as e:
+            print(f"[ATTACHMENT ERROR] {e}")
+            return None
+
+    # =====================================================
+    # REAL MODERATOR
+    # =====================================================
+
+    async def get_real_moderator(
+        self,
+        guild,
+        action,
+        target_id
+    ):
+
+        try:
+
+            async for entry in guild.audit_logs(
+                limit=10,
+                action=action
+            ):
+
+                if not entry.target:
+                    continue
+
+                if entry.target.id != target_id:
+                    continue
+
+                now = datetime.now(
+                    timezone.utc
+                )
+
+                diff = (
+                    now - entry.created_at
+                ).total_seconds()
+
+                if diff <= 10:
+                    return (
+                        entry.user,
+                        entry.reason
+                    )
+
+        except Exception as e:
+            print(f"[AUDIT ERROR] {e}")
+
+        return None, "Aucune raison"
+
+    # =====================================================
+    # MESSAGE CREATE
+    # =====================================================
+
     @commands.Cog.listener()
     async def on_message(self, message):
-        if message.author.bot: return
-        if message.attachments:
+
+        if message.author.bot:
+            return
+
+        try:
+
+            # =================================================
+            # SAVE FILES
+            # =================================================
+
+            saved_files = []
+
+            if message.attachments:
+
+                for attachment in message.attachments:
+
+                    path = await self.save_attachment(
+                        attachment
+                    )
+
+                    if path:
+                        saved_files.append(path)
+
+                self.message_cache[message.id] = {
+                    "files": saved_files
+                }
+
+            # =================================================
+            # IMAGE LOGS
+            # =================================================
+
             for attachment in message.attachments:
-                if any(attachment.filename.lower().endswith(ext) for ext in ['png', 'jpg', 'jpeg', 'gif', 'webp']):
-                    embed = discord.Embed(title="📸 Image Envoyée", color=discord.Color.blue(), timestamp=datetime.now())
-                    embed.add_field(name="Auteur", value=message.author.mention)
-                    embed.add_field(name="Salon", value=message.channel.mention)
-                    embed.set_image(url=attachment.url)
-                    await self.send_log("images", embed)
 
-    # --- LOGS-MESSAGE02 (MODIFICATION) ---
+                if attachment.filename.lower().endswith(
+                    IMAGE_EXTENSIONS
+                ):
+
+                    embed = discord.Embed(
+                        title="📸 Image Envoyée",
+                        color=discord.Color.blue(),
+                        timestamp=datetime.now()
+                    )
+
+                    embed.set_author(
+                        name=str(message.author),
+                        icon_url=message.author.display_avatar.url
+                    )
+
+                    embed.add_field(
+                        name="Utilisateur",
+                        value=message.author.mention
+                    )
+
+                    embed.add_field(
+                        name="Salon",
+                        value=message.channel.mention
+                    )
+
+                    embed.add_field(
+                        name="Fichier",
+                        value=attachment.filename,
+                        inline=False
+                    )
+
+                    embed.set_image(
+                        url=attachment.url
+                    )
+
+                    embed.set_footer(
+                        text=f"Message ID : {message.id}"
+                    )
+
+                    await self.send_log(
+                        "images",
+                        embed
+                    )
+
+            # =================================================
+            # INSULTES
+            # =================================================
+
+            content_lower = message.content.lower()
+
+            for word in BAD_WORDS:
+
+                if word in content_lower:
+
+                    embed = discord.Embed(
+                        title="⚠️ Insulte Détectée",
+                        color=discord.Color.orange(),
+                        timestamp=datetime.now()
+                    )
+
+                    embed.set_author(
+                        name=str(message.author),
+                        icon_url=message.author.display_avatar.url
+                    )
+
+                    embed.add_field(
+                        name="Utilisateur",
+                        value=message.author.mention
+                    )
+
+                    embed.add_field(
+                        name="Salon",
+                        value=message.channel.mention
+                    )
+
+                    embed.add_field(
+                        name="Mot détecté",
+                        value=f"`{word}`"
+                    )
+
+                    embed.add_field(
+                        name="Message",
+                        value=message.content[:1000],
+                        inline=False
+                    )
+
+                    await self.send_log(
+                        "moderation",
+                        embed
+                    )
+
+                    break
+
+            # =================================================
+            # INVITATIONS DISCORD
+            # =================================================
+
+            if DISCORD_INVITE_REGEX.search(
+                message.content
+            ):
+
+                embed = discord.Embed(
+                    title="🚫 Invitation Discord",
+                    color=discord.Color.dark_red(),
+                    timestamp=datetime.now()
+                )
+
+                embed.set_author(
+                    name=str(message.author),
+                    icon_url=message.author.display_avatar.url
+                )
+
+                embed.add_field(
+                    name="Utilisateur",
+                    value=message.author.mention
+                )
+
+                embed.add_field(
+                    name="Salon",
+                    value=message.channel.mention
+                )
+
+                embed.add_field(
+                    name="Message",
+                    value=message.content[:1000],
+                    inline=False
+                )
+
+                await self.send_log(
+                    "moderation",
+                    embed
+                )
+
+            # =================================================
+            # LIENS NON AUTORISÉS
+            # =================================================
+
+            links = LINK_REGEX.findall(
+                message.content
+            )
+
+            if links:
+
+                unauthorized = False
+
+                for link in links:
+
+                    if not any(
+                        domain in link
+                        for domain in AUTHORIZED_DOMAINS
+                    ):
+                        unauthorized = True
+                        break
+
+                if unauthorized:
+
+                    embed = discord.Embed(
+                        title="🚫 Lien Non Autorisé",
+                        color=discord.Color.red(),
+                        timestamp=datetime.now()
+                    )
+
+                    embed.set_author(
+                        name=str(message.author),
+                        icon_url=message.author.display_avatar.url
+                    )
+
+                    embed.add_field(
+                        name="Utilisateur",
+                        value=message.author.mention
+                    )
+
+                    embed.add_field(
+                        name="Salon",
+                        value=message.channel.mention
+                    )
+
+                    embed.add_field(
+                        name="Message",
+                        value=message.content[:1000],
+                        inline=False
+                    )
+
+                    await self.send_log(
+                        "moderation",
+                        embed
+                    )
+
+        except Exception as e:
+            print(f"[MESSAGE ERROR] {e}")
+
+    # =====================================================
+    # MESSAGE DELETE
+    # =====================================================
+
     @commands.Cog.listener()
-    async def on_message_edit(self, before, after):
-        if before.author.bot or before.content == after.content: return
-        embed = discord.Embed(title="📝 Message Modifié", color=discord.Color.orange(), timestamp=datetime.now())
-        embed.add_field(name="Auteur", value=before.author.mention)
-        embed.add_field(name="Ancien", value=before.content, inline=False)
-        embed.add_field(name="Nouveau", value=after.content, inline=False)
-        await self.send_log("message02", embed)
+    async def on_message_delete(
+        self,
+        message
+    ):
 
-    # --- LOGS-SALONS (CREATION/SUPPRESSION) ---
+        if message.author.bot:
+            return
+
+        try:
+
+            embed = discord.Embed(
+                title="🗑️ Message Supprimé",
+                color=discord.Color.red(),
+                timestamp=datetime.now()
+            )
+
+            embed.set_author(
+                name=str(message.author),
+                icon_url=message.author.display_avatar.url
+            )
+
+            embed.add_field(
+                name="Auteur",
+                value=f"{message.author.mention}\n`{message.author.id}`",
+                inline=False
+            )
+
+            embed.add_field(
+                name="Salon",
+                value=message.channel.mention,
+                inline=False
+            )
+
+            embed.add_field(
+                name="Message",
+                value=message.content[:1000]
+                if message.content
+                else "*Vide*",
+                inline=False
+            )
+
+            await self.send_log(
+                "messages",
+                embed
+            )
+
+            # =============================================
+            # RESTORE FILES
+            # =============================================
+
+            data = self.message_cache.get(
+                message.id
+            )
+
+            if data:
+
+                files = []
+
+                for path in data["files"]:
+
+                    if os.path.exists(path):
+
+                        files.append(
+                            discord.File(path)
+                        )
+
+                if files:
+
+                    img_embed = discord.Embed(
+                        title="🖼️ Fichier Supprimé",
+                        color=discord.Color.dark_red(),
+                        timestamp=datetime.now()
+                    )
+
+                    img_embed.set_author(
+                        name=str(message.author),
+                        icon_url=message.author.display_avatar.url
+                    )
+
+                    img_embed.add_field(
+                        name="Auteur",
+                        value=message.author.mention
+                    )
+
+                    img_embed.add_field(
+                        name="Salon",
+                        value=message.channel.mention
+                    )
+
+                    img_embed.add_field(
+                        name="Message",
+                        value=message.content
+                        or "*Aucun texte*",
+                        inline=False
+                    )
+
+                    await self.send_log(
+                        "images",
+                        img_embed,
+                        files
+                    )
+
+        except Exception as e:
+            print(f"[DELETE ERROR] {e}")
+
+    # =====================================================
+    # MESSAGE EDIT
+    # =====================================================
+
     @commands.Cog.listener()
-    async def on_guild_channel_create(self, channel):
-        embed = discord.Embed(title="📂 Salon Créé", color=discord.Color.green(), timestamp=datetime.now())
-        embed.add_field(name="Nom", value=f"`#{channel.name}`")
-        embed.add_field(name="Catégorie", value=channel.category.name if channel.category else "Aucune")
-        await self.send_log("salons", embed)
+    async def on_message_edit(
+        self,
+        before,
+        after
+    ):
+
+        if before.author.bot:
+            return
+
+        if before.content == after.content:
+            return
+
+        try:
+
+            embed = discord.Embed(
+                title="✏️ Message Modifié",
+                color=discord.Color.orange(),
+                timestamp=datetime.now()
+            )
+
+            embed.set_author(
+                name=str(before.author),
+                icon_url=before.author.display_avatar.url
+            )
+
+            embed.add_field(
+                name="Auteur",
+                value=before.author.mention
+            )
+
+            embed.add_field(
+                name="Salon",
+                value=before.channel.mention
+            )
+
+            embed.add_field(
+                name="Ancien",
+                value=before.content[:1000]
+                or "*Vide*",
+                inline=False
+            )
+
+            embed.add_field(
+                name="Nouveau",
+                value=after.content[:1000]
+                or "*Vide*",
+                inline=False
+            )
+
+            await self.send_log(
+                "message_edit",
+                embed
+            )
+
+        except Exception as e:
+            print(f"[EDIT ERROR] {e}")
+
+    # =====================================================
+    # VOICE LOGS
+    # =====================================================
 
     @commands.Cog.listener()
-    async def on_guild_channel_delete(self, channel):
-        embed = discord.Embed(title="📁 Salon Supprimé", color=discord.Color.red(), timestamp=datetime.now())
-        embed.add_field(name="Nom", value=f"`#{channel.name}`")
-        await self.send_log("salons", embed)
+    async def on_voice_state_update(
+        self,
+        member,
+        before,
+        after
+    ):
 
-    # --- LOGS-ROLES (CREATION/SUPPRESSION/MODIFICATION) ---
-    @commands.Cog.listener()
-    async def on_guild_role_create(self, role):
-        embed = discord.Embed(title="🎭 Rôle Créé", color=discord.Color.blue(), timestamp=datetime.now())
-        embed.add_field(name="Nom du rôle", value=role.name)
-        await self.send_log("roles", embed)
+        try:
 
-    @commands.Cog.listener()
-    async def on_guild_role_delete(self, role):
-        embed = discord.Embed(title="🔥 Rôle Supprimé", color=discord.Color.dark_red(), timestamp=datetime.now())
-        embed.add_field(name="Nom du rôle", value=role.name)
-        await self.send_log("roles", embed)
+            # JOIN
 
-    @commands.Cog.listener()
-    async def on_guild_role_update(self, before, after):
-        if before.name != after.name:
-            embed = discord.Embed(title="✏️ Rôle Renommé", color=discord.Color.blurple(), timestamp=datetime.now())
-            embed.add_field(name="Ancien Nom", value=before.name)
-            embed.add_field(name="Nouveau Nom", value=after.name)
-            await self.send_log("roles", embed)
+            if before.channel is None and after.channel:
 
-    # --- LOGS-VOCAL ---
-    @commands.Cog.listener()
-    async def on_voice_state_update(self, member, before, after):
-        if before.channel is None and after.channel is not None:
-            embed = discord.Embed(title="🎙️ Connexion Vocale", color=discord.Color.green(), timestamp=datetime.now())
-            embed.add_field(name="Membre", value=member.mention)
-            embed.add_field(name="Salon", value=after.channel.mention)
-            await self.send_log("vocal", embed)
-        elif before.channel is not None and after.channel is None:
-            embed = discord.Embed(title="🔇 Déconnexion Vocale", color=discord.Color.red(), timestamp=datetime.now())
-            embed.add_field(name="Membre", value=member.mention)
-            embed.add_field(name="Salon quitté", value=before.channel.name)
-            await self.send_log("vocal", embed)
-        elif before.channel is not None and after.channel is not None and before.channel != after.channel:
-            embed = discord.Embed(title="🔄 Changement de Salon", color=discord.Color.blurple(), timestamp=datetime.now())
-            embed.add_field(name="Membre", value=member.mention)
-            embed.add_field(name="De", value=before.channel.name, inline=True)
-            embed.add_field(name="À", value=after.channel.name, inline=True)
-            await self.send_log("vocal", embed)
+                embed = discord.Embed(
+                    title="🎙️ Connexion Vocale",
+                    color=discord.Color.green(),
+                    timestamp=datetime.now()
+                )
 
-        if before.channel is not None and after.channel is not None and before.channel == after.channel:
-            if before.status != after.status:
-                embed = discord.Embed(title="💬 Statut Vocal Modifié", color=discord.Color.gold(), timestamp=datetime.now())
-                embed.set_author(name=member.display_name, icon_url=member.display_avatar.url)
-                embed.add_field(name="Membre", value=member.mention)
-                embed.add_field(name="Ancien Statut", value=f"`{before.status}`" if before.status else "*Aucun*", inline=False)
-                embed.add_field(name="Nouveau Statut", value=f"`{after.status}`" if after.status else "*Aucun*", inline=False)
-                await self.send_log("vocal", embed)
+                embed.add_field(
+                    name="Membre",
+                    value=member.mention
+                )
 
-    # --- NOUVEAUX LOGS : MUTE, KICK, BAN ---
+                embed.add_field(
+                    name="Salon",
+                    value=after.channel.mention
+                )
 
-    @commands.Cog.listener()
-    async def on_member_update(self, before, after):
-        # Log pour le MUTE (Timeout)
-        if before.timed_out_until != after.timed_out_until:
-            if after.timed_out_until is not None:
-                # L'utilisateur vient d'être mute
-                async for entry in after.guild.audit_logs(limit=1, action=discord.AuditLogAction.member_update):
-                    mod = entry.user
-                    reason = entry.reason or "Aucune raison"
-                
-                embed = discord.Embed(title="🔇 Membre Mute (Timeout)", color=discord.Color.orange(), timestamp=datetime.now())
-                embed.add_field(name="Cible", value=after.mention)
-                embed.add_field(name="Modérateur", value=mod.mention)
-                embed.add_field(name="Fin du mute", value=discord.utils.format_dt(after.timed_out_until, style='R'))
-                embed.add_field(name="Raison", value=reason, inline=False)
-                await self.send_log("mutes", embed)
+                await self.send_log(
+                    "vocal",
+                    embed
+                )
 
-    @commands.Cog.listener()
-    async def on_member_remove(self, member):
-        # Log pour l'EXCLUSION (Kick)
-        async for entry in member.guild.audit_logs(limit=1, action=discord.AuditLogAction.kick):
-            if entry.target.id == member.id:
-                embed = discord.Embed(title="👢 Membre Exclu", color=discord.Color.red(), timestamp=datetime.now())
-                embed.add_field(name="Cible", value=f"{member} ({member.id})")
-                embed.add_field(name="Modérateur", value=entry.user.mention)
-                embed.add_field(name="Raison", value=entry.reason or "Aucune raison", inline=False)
-                await self.send_log("kicks", embed)
-                break
+            # LEAVE
 
-    @commands.Cog.listener()
-    async def on_member_ban(self, guild, user):
-        # Log pour le BANNISSEMENT
-        async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.ban):
-            if entry.target.id == user.id:
-                embed = discord.Embed(title="🔨 Membre Banni", color=discord.Color.dark_red(), timestamp=datetime.now())
-                embed.add_field(name="Cible", value=f"{user} ({user.id})")
-                embed.add_field(name="Modérateur", value=entry.user.mention)
-                embed.add_field(name="Raison", value=entry.reason or "Aucune raison", inline=False)
-                await self.send_log("bans", embed)
-                break
+            elif before.channel and after.channel is None:
 
-async def setup(bot):
-    await bot.add_cog(Logs(bot))
+                embed = discord.Embed(
+                    title="🔇 Déconnexion Vocale",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now()
+                )
+
+                embed.add_field(
+                    name="Membre",
+                    value=member.mention
+                )
+
+                embed.add_field(
+                    name="Salon",
+                    value=before.channel.name
+                )
+
+                await self.send_log(
+                    "vocal",
+                    embed
+                )
+
+            # MOVE
+
+            elif (
+                before.channel
+                and after.channel
+                and before.channel != after.channel
+            ):
+
+                embed = discord.Embed(
+                    title="🔄 Changement Vocal",
+                    color=discord.Color.blurple(),
+                    timestamp=datetime.now()
+                )
+
+                embed.add_field(
+                    name="Membre",
+                    value=member.mention
+                )
+
+                embed.add_field(
+                    name="Avant",
+                    value=before.channel.name
+                )
+
+                embed.add_field(
+                    name="Après",
+                    value=after.channel.name
+                )
+
+                await self.send_log(
+                    "vocal",
+                    embed
+                )
+
+        except Exception as e:
+            print(f"[VOICE ERROR] {e}")
+
+    
