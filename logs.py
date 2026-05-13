@@ -696,4 +696,209 @@ class Logs(commands.Cog):
         except Exception as e:
             print(f"[VOICE ERROR] {e}")
 
-    
+# =====================================================
+    # TIMEOUT
+    # =====================================================
+
+    @commands.Cog.listener()
+    async def on_member_update(
+        self,
+        before,
+        after
+    ):
+
+        try:
+
+            if before.timed_out_until != after.timed_out_until:
+
+                moderator, reason = await self.get_real_moderator(
+                    after.guild,
+                    discord.AuditLogAction.member_update,
+                    after.id
+                )
+
+                # TIMEOUT ADDED
+
+                if after.timed_out_until:
+
+                    embed = discord.Embed(
+                        title="🔇 Timeout",
+                        color=discord.Color.orange(),
+                        timestamp=datetime.now()
+                    )
+
+                    embed.add_field(
+                        name="Membre",
+                        value=after.mention
+                    )
+
+                    embed.add_field(
+                        name="Modérateur",
+                        value=moderator.mention
+                        if moderator
+                        else "Inconnu"
+                    )
+
+                    embed.add_field(
+                        name="Raison",
+                        value=reason
+                        or "Aucune",
+                        inline=False
+                    )
+
+                    embed.add_field(
+                        name="Fin",
+                        value=discord.utils.format_dt(
+                            after.timed_out_until,
+                            style="R"
+                        )
+                    )
+
+                    await self.send_log(
+                        "mutes",
+                        embed
+                    )
+
+                # TIMEOUT REMOVED
+
+                else:
+
+                    embed = discord.Embed(
+                        title="🔊 Timeout Retiré",
+                        color=discord.Color.green(),
+                        timestamp=datetime.now()
+                    )
+
+                    embed.add_field(
+                        name="Membre",
+                        value=after.mention
+                    )
+
+                    embed.add_field(
+                        name="Modérateur",
+                        value=moderator.mention
+                        if moderator
+                        else "Inconnu"
+                    )
+
+                    await self.send_log(
+                        "mutes",
+                        embed
+                    )
+
+        except Exception as e:
+            print(f"[TIMEOUT ERROR] {e}")
+
+    # =====================================================
+    # KICKS
+    # =====================================================
+
+    @commands.Cog.listener()
+    async def on_member_remove(
+        self,
+        member
+    ):
+
+        await asyncio.sleep(1)
+
+        try:
+
+            moderator, reason = await self.get_real_moderator(
+                member.guild,
+                discord.AuditLogAction.kick,
+                member.id
+            )
+
+            if moderator:
+
+                embed = discord.Embed(
+                    title="👢 Membre Exclu",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now()
+                )
+
+                embed.add_field(
+                    name="Membre",
+                    value=f"{member} ({member.id})"
+                )
+
+                embed.add_field(
+                    name="Modérateur",
+                    value=moderator.mention
+                )
+
+                embed.add_field(
+                    name="Raison",
+                    value=reason
+                    or "Aucune",
+                    inline=False
+                )
+
+                await self.send_log(
+                    "kicks",
+                    embed
+                )
+
+        except Exception as e:
+            print(f"[KICK ERROR] {e}")
+
+    # =====================================================
+    # BANS
+    # =====================================================
+
+    @commands.Cog.listener()
+    async def on_member_ban(
+        self,
+        guild,
+        user
+    ):
+
+        await asyncio.sleep(1)
+
+        try:
+
+            moderator, reason = await self.get_real_moderator(
+                guild,
+                discord.AuditLogAction.ban,
+                user.id
+            )
+
+            embed = discord.Embed(
+                title="🔨 Membre Banni",
+                color=discord.Color.dark_red(),
+                timestamp=datetime.now()
+            )
+
+            embed.add_field(
+                name="Utilisateur",
+                value=f"{user} ({user.id})"
+            )
+
+            embed.add_field(
+                name="Modérateur",
+                value=moderator.mention
+                if moderator
+                else "Inconnu"
+            )
+
+            embed.add_field(
+                name="Raison",
+                value=reason
+                or "Aucune",
+                inline=False
+            )
+
+            await self.send_log(
+                "bans",
+                embed
+            )
+
+        except Exception as e:
+            print(f"[BAN ERROR] {e}")
+
+# =========================================================
+# SETUP
+# =========================================================
+
+async def setup(bot):
+    await bot.add_cog(Logs(bot))
