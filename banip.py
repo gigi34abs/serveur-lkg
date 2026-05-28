@@ -1,50 +1,73 @@
 import discord
 from discord.ext import commands
 from collections import defaultdict
-import time
 
 class BanIPCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.banned_ips = defaultdict(list)  # {ip: [user_ids]}
     
-    def get_user_ip(self, member):
+    def get_user_ip(self, user_id):
         """Récupère l'IP d'un utilisateur (simulé)"""
-        # Note: Discord ne donne pas accès aux IPs réelles
-        # On utilise un hash basé sur l'ID utilisateur
-        return hash(str(member.id)) % 256
+        return hash(str(user_id)) % 256
     
-    @discord.app_commands.command(name="banip", description="Bannir un utilisateur par IP")
-    async def ban_ip(self, interaction: discord.Interaction, member: discord.Member, *, reason: str = "Pas de raison"):
-        """/banip @user Raison du ban"""
+    @discord.app_commands.command(name="banip", description="Bannir un utilisateur par IP (@ping ou ID)")
+    async def ban_ip(self, interaction: discord.Interaction, user: str, *, reason: str = "Pas de raison"):
+        """/banip @user Raison ou /banip 123456789 Raison"""
         
         # Vérifier les perms
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Tu dois être admin", ephemeral=True)
             return
         
-        if member.id == interaction.user.id:
-            await interaction.response.send_message("❌ Tu ne peux pas te bannir toi-même", ephemeral=True)
+        guild = interaction.guild
+        member = None
+        user_id = None
+        
+        # Essayer de récupérer par @ping
+        try:
+            if user.startswith("<@"):
+                user_id = int(user.strip("<@!>"))
+                member = await guild.fetch_member(user_id)
+            else:
+                # Essayer comme ID direct
+                user_id = int(user)
+                try:
+                    member = await guild.fetch_member(user_id)
+                except:
+                    pass
+        except ValueError:
+            await interaction.response.send_message("❌ ID ou mention invalide", ephemeral=True)
             return
         
-        guild = interaction.guild
+        if user_id is None:
+            await interaction.response.send_message("❌ Utilisateur introuvable", ephemeral=True)
+            return
         
-        # Récupérer l'"IP" (simulée)
-        ip = self.get_user_ip(member)
+        # Récupérer l'IP
+        ip = self.get_user_ip(user_id)
         
         # Ajouter à la liste des IPs bannies
-        self.banned_ips[ip].append(member.id)
+        self.banned_ips[ip].append(user_id)
         
-        # Bannir l'utilisateur
-        try:
-            await guild.ban(member, reason=f"Ban IP - {reason}")
-        except:
-            pass
+        # Bannir l'utilisateur si possible
+        if member:
+            try:
+                await guild.ban(member, reason=f"Ban IP - {reason}")
+            except:
+                pass
+        else:
+            # Utilisateur n'existe plus sur le serveur, on le bannit quand même
+            try:
+                user_obj = await self.bot.fetch_user(user_id)
+                await guild.ban(user_obj, reason=f"Ban IP - {reason}")
+            except:
+                pass
         
-        # Message
+        # Message de confirmation
         embed = discord.Embed(
             title="⛔ UTILISATEUR BANNI PAR IP",
-            description=f"**Utilisateur :** {member.mention}\n"
+            description=f"**ID :** `{user_id}`\n"
             f"**IP :** `{ip}`\n"
             f"**Raison :** {reason}",
             color=discord.Color.dark_red()
@@ -54,7 +77,7 @@ class BanIPCog(commands.Cog):
         # Log
         embed_log = discord.Embed(
             title="🚫 Ban IP",
-            description=f"{member.mention} a été banni par IP ({ip})\n**Raison :** {reason}",
+            description=f"**ID :** {user_id}\n**IP :** `{ip}`\n**Raison :** {reason}",
             color=discord.Color.dark_red()
         )
         
@@ -66,7 +89,7 @@ class BanIPCog(commands.Cog):
                     pass
     
     @discord.app_commands.command(name="unbanip", description="Débannir une IP")
-    async def unban_ip(self, interaction: discord.Interaction, member_id: int):
+    async def unban_ip(self, interaction: discord.Interaction, user_id: int):
         """/unbanip 123456789"""
         
         # Vérifier les perms
@@ -76,27 +99,23 @@ class BanIPCog(commands.Cog):
         
         guild = interaction.guild
         
-        # Récupérer l'"IP" (simulée)
-        try:
-            member = await self.bot.fetch_user(member_id)
-            ip = self.get_user_ip(member)
-        except:
-            await interaction.response.send_message("❌ ID utilisateur invalide", ephemeral=True)
-            return
+        # Récupérer l'IP
+        ip = self.get_user_ip(user_id)
         
         # Débannir
         try:
-            await guild.unban(member)
+            user_obj = await self.bot.fetch_user(user_id)
+            await guild.unban(user_obj)
         except:
             pass
         
         # Retirer de la liste
-        if ip in self.banned_ips:
-            self.banned_ips[ip].remove(member_id)
+        if ip in self.banned_ips and user_id in self.banned_ips[ip]:
+            self.banned_ips[ip].remove(user_id)
         
         embed = discord.Embed(
             title="✅ UTILISATEUR DÉBANNI",
-            description=f"**ID :** {member_id}\n**IP :** `{ip}`",
+            description=f"**ID :** {user_id}\n**IP :** `{ip}`",
             color=discord.Color.green()
         )
         await interaction.response.send_message(embed=embed)
@@ -111,7 +130,7 @@ class BanIPCog(commands.Cog):
             return
         
         if not self.banned_ips:
-            await interaction.response.send_message("❌ Aucune IP bannies", ephemeral=True)
+            await interaction.response.send_message("❌ Aucune IP bannie", ephemeral=True)
             return
         
         embed = discord.Embed(
@@ -119,10 +138,10 @@ class BanIPCog(commands.Cog):
             color=discord.Color.dark_red()
         )
         
-        for ip, users in self.banned_ips.items():
+        for ip, users in list(self.banned_ips.items())[:25]:  # Max 25 fields
             embed.add_field(
                 name=f"IP: `{ip}`",
-                value=f"**Users:** {len(users)} banni(s)\n**IDs:** {', '.join(map(str, users))}",
+                value=f"**Users:** {len(users)} banni(s)\n**IDs:** {', '.join(map(str, users[:5]))}{'...' if len(users) > 5 else ''}",
                 inline=False
             )
         
@@ -132,15 +151,15 @@ class BanIPCog(commands.Cog):
     async def on_member_join(self, member):
         """Vérifier si l'IP est bannie à la connexion"""
         guild = member.guild
-        ip = self.get_user_ip(member)
+        ip = self.get_user_ip(member.id)
         
         if ip in self.banned_ips:
             try:
-                await guild.ban(member, reason="IP bannie - reconnexion")
+                await guild.ban(member, reason="IP bannie - tentative de reconnexion")
                 
                 embed = discord.Embed(
                     title="🚫 TENTATIVE DE RECONNEXION DÉTECTÉE",
-                    description=f"{member.mention} a tenté de se reconnecter avec une IP bannie",
+                    description=f"{member.mention} (ID: {member.id}) a tenté de se reconnecter avec une IP bannie",
                     color=discord.Color.dark_red()
                 )
                 
