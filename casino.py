@@ -513,3 +513,72 @@ async def jeux_mystere(interaction: discord.Interaction):
 
     view = MystereView(interaction.user.id, bot_card, required_bet)
     await interaction.response.send_message(embed=embed, view=view)
+
+# ================= PARTIE 6.2 =================
+# Coinflip 1v1
+
+class CoinflipView(discord.ui.View):
+    def __init__(self, challenger, opponent, amount):
+        super().__init__(timeout=60)
+        self.challenger = challenger
+        self.opponent = opponent
+        self.amount = amount
+        self.accepted = False
+
+    @discord.ui.button(label="Accepter le défi", style=discord.ButtonStyle.success)
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.opponent.id:
+            await interaction.response.send_message("Ce n'est pas votre défi.", ephemeral=True)
+            return
+        if self.accepted:
+            await interaction.response.send_message("Déjà accepté.", ephemeral=True)
+            return
+        self.accepted = True
+        self.stop()
+        # Vérifier que l'adversaire a assez
+        opp_data = get_user_data(self.opponent.id)
+        if opp_data["pocket"] < self.amount:
+            await interaction.response.send_message("Vous n'avez pas assez d'argent pour accepter.", ephemeral=True)
+            return
+        # Déduire les mises
+        chal_data = get_user_data(self.challenger.id)
+        chal_data["pocket"] -= self.amount
+        set_user_data(self.challenger.id, pocket=chal_data["pocket"])
+        opp_data["pocket"] -= self.amount
+        set_user_data(self.opponent.id, pocket=opp_data["pocket"])
+        # Lancer le coin
+        winner = random.choice([self.challenger, self.opponent])
+        winner_data = get_user_data(winner.id)
+        winner_data["pocket"] += self.amount * 2
+        set_user_data(winner.id, pocket=winner_data["pocket"])
+        await interaction.response.edit_message(content=f"🪙 Coinflip ! {winner.mention} remporte {self.amount*2}€ !", view=None)
+
+@jeux.command(name="coinflip", description="Défiez un autre joueur en 1v1 (pari égal)")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+@app_commands.describe(adversaire="Le joueur à défier", montant="Montant à parier")
+async def jeux_coinflip(interaction: discord.Interaction, adversaire: discord.Member, montant: int):
+    if not in_command_category(interaction):
+        await interaction.response.send_message("Cette commande est réservée aux salons de la catégorie Casino.", ephemeral=True)
+        return
+    if not has_casino_role(interaction):
+        await interaction.response.send_message("Vous n'avez pas le rôle Casino.", ephemeral=True)
+        return
+    if montant < 10:
+        await interaction.response.send_message("Le montant minimum est de 10€.", ephemeral=True)
+        return
+    if adversaire.id == interaction.user.id:
+        await interaction.response.send_message("Vous ne pouvez pas vous défier vous-même.", ephemeral=True)
+        return
+    data = get_user_data(interaction.user.id)
+    if data["pocket"] < montant:
+        await interaction.response.send_message("Vous n'avez pas assez d'argent.", ephemeral=True)
+        return
+    # Vérifier que l'adversaire a le rôle casino
+    if CASINO_ROLE_ID not in [r.id for r in adversaire.roles]:
+        await interaction.response.send_message("L'adversaire n'a pas le rôle Casino.", ephemeral=True)
+        return
+    # Créer un message de défi
+    embed = discord.Embed(title="🪙 Défi Coinflip", description=f"{interaction.user.mention} défie {adversaire.mention} pour un pari de {montant}€ !", color=discord.Color.blue())
+    view = CoinflipView(interaction.user, adversaire, montant)
+    await interaction.response.send_message(embed=embed, view=view)
