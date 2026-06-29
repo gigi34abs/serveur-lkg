@@ -1230,3 +1230,122 @@ async def admin_argent(interaction: discord.Interaction, action: str, membre: di
         data["pocket"] -= montant
     set_user_data(membre.id, pocket=data["pocket"])
     await interaction.response.send_message(f"{action.capitalize()} {montant}€ à {membre.mention} (poche). Nouveau solde : {data['pocket']}€.")
+
+# ================= PARTIE 8 =================
+# Commande journalier
+
+# Stocker le dernier timestamp de réclamation par utilisateur
+daily_cooldown = {}
+
+@bot.tree.command(name="journalier", description="Réclamer 200€ une fois par jour")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+async def journalier(interaction: discord.Interaction):
+    if not in_command_category(interaction):
+        await interaction.response.send_message("Cette commande est réservée aux salons de la catégorie Casino.", ephemeral=True)
+        return
+    if not has_casino_role(interaction):
+        await interaction.response.send_message("Vous n'avez pas le rôle Casino.", ephemeral=True)
+        return
+    user_id = interaction.user.id
+    now = datetime.now()
+    last = daily_cooldown.get(user_id)
+    if last and (now - last).total_seconds() < 86400:
+        remaining = timedelta(seconds=86400 - (now - last).total_seconds())
+        await interaction.response.send_message(f"Vous avez déjà réclamé vos 200€ aujourd'hui. Prochain dans {remaining}.", ephemeral=True)
+        return
+    data = get_user_data(user_id)
+    data["pocket"] += 200
+    set_user_data(user_id, pocket=data["pocket"])
+    daily_cooldown[user_id] = now
+    await interaction.response.send_message("Vous avez reçu 200€ ! Revenez demain.")
+
+# ================= PARTIE 9 =================
+# Commande aide
+
+@bot.tree.command(name="aide", description="Afficher toutes les commandes disponibles")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+async def aide(interaction: discord.Interaction):
+    embed = discord.Embed(title="📚 Aide - Commandes du Casino", color=discord.Color.blue())
+    embed.add_field(name="💰 Banque", value="`/banque voir` - Voir son argent\n`/banque depot` - Déposer\n`/banque retrait` - Retirer\n`/banque argent` - Voir argent d'un membre\n`/banque classement` - Classement des riches", inline=False)
+    embed.add_field(name="💸 Argent", value="`/argent donner` - Donner à un membre\n`/argent voler` - Voler (1/3 chance)", inline=False)
+    embed.add_field(name="🎲 Jeux", value="`/jeux mystere` - Deviner la carte\n`/jeux coinflip` - 1v1 pile ou face\n`/jeux duel` - 1v1 pierre-feuille-ciseaux\n`/jeux teamfight` - Combat 5v5\n`/jeux teamquiz` - Quiz en équipe\n`/jeux uno` - UNO (créer une partie)", inline=False)
+    embed.add_field(name="🎁 Giveaway", value="Giveaway automatique toutes les 30 min (14h-20h) dans <#1498394479319716040>", inline=False)
+    embed.add_field(name="📆 Journalier", value="`/journalier` - 200€ par jour", inline=False)
+    embed.add_field(name="🛒 Boutique", value="`/boutique` - Voir les articles\n`/acheter` - Acheter un article", inline=False)
+    await interaction.response.send_message(embed=embed)
+
+# ================= PARTIE 10 =================
+# Boutique
+
+# Articles : nom, prix, type (role ou item virtuel)
+shop_items = [
+    {"name": "Role VIP", "price": 1000, "type": "role", "role_id": 123456789},  # Remplacez par un ID de rôle existant
+    {"name": "Coffre mystère", "price": 500, "type": "item", "description": "Contient une surprise (50€ à 1000€)"},
+    {"name": "Assurance vol", "price": 200, "type": "item", "description": "Protège votre poche contre un vol (une fois)"},
+]
+
+@bot.tree.command(name="boutique", description="Afficher les articles disponibles")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+async def boutique(interaction: discord.Interaction):
+    embed = discord.Embed(title="🛒 Boutique", color=discord.Color.gold())
+    for item in shop_items:
+        embed.add_field(name=item["name"], value=f"Prix : {item['price']}€\n{item.get('description', '')}", inline=False)
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="acheter", description="Acheter un article de la boutique")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+@app_commands.describe(article="Nom de l'article à acheter")
+async def acheter(interaction: discord.Interaction, article: str):
+    if not in_command_category(interaction):
+        await interaction.response.send_message("Cette commande est réservée aux salons de la catégorie Casino.", ephemeral=True)
+        return
+    if not has_casino_role(interaction):
+        await interaction.response.send_message("Vous n'avez pas le rôle Casino.", ephemeral=True)
+        return
+    # Trouver l'article
+    item = None
+    for i in shop_items:
+        if i["name"].lower() == article.lower():
+            item = i
+            break
+    if item is None:
+        await interaction.response.send_message("Article introuvable. Utilisez `/boutique` pour voir la liste.", ephemeral=True)
+        return
+    data = get_user_data(interaction.user.id)
+    if data["pocket"] < item["price"]:
+        await interaction.response.send_message("Vous n'avez pas assez d'argent.", ephemeral=True)
+        return
+    # Déduire l'argent
+    data["pocket"] -= item["price"]
+    set_user_data(interaction.user.id, pocket=data["pocket"])
+    # Effet
+    if item["type"] == "role":
+        role = interaction.guild.get_role(item["role_id"])
+        if role:
+            await interaction.user.add_roles(role)
+            await interaction.response.send_message(f"Vous avez acheté le rôle {role.mention} !")
+        else:
+            await interaction.response.send_message("Rôle introuvable, contactez un admin.")
+    elif item["type"] == "item":
+        if item["name"] == "Coffre mystère":
+            gain = random.randint(50, 1000)
+            data["pocket"] += gain
+            set_user_data(interaction.user.id, pocket=data["pocket"])
+            await interaction.response.send_message(f"Vous avez ouvert le coffre et gagné {gain}€ !")
+        elif item["name"] == "Assurance vol":
+            # Stocker dans les données utilisateur un flag
+            data["insurance"] = True
+            set_user_data(interaction.user.id, **data)  # Attention, on doit sauvegarder tout
+            await interaction.response.send_message("Vous êtes désormais protégé contre un vol (une seule utilisation).")
+        else:
+            await interaction.response.send_message("Article acheté mais effet non implémenté.")
+
+# ================= PARTIE 11 =================
+# Lancement du bot
+
+if __name__ == "__main__":
+    bot.run(TOKEN)
