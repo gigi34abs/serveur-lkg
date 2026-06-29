@@ -281,3 +281,83 @@ async def banque_classement(interaction: discord.Interaction):
         description = "Aucun joueur enregistré."
     embed.description = description
     await interaction.response.send_message(embed=embed)
+
+# ================= PARTIE 4 =================
+# Commandes du groupe /argent
+
+@bot.tree.command(name="argent", description="Gestion des transactions entre joueurs")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+async def argent(interaction: discord.Interaction):
+    pass
+
+@argent.command(name="donner", description="Donner de l'argent à un autre membre")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+@app_commands.describe(membre="Le bénéficiaire", montant="Montant à donner (minimum 1)")
+async def argent_donner(interaction: discord.Interaction, membre: discord.Member, montant: int):
+    if not in_command_category(interaction):
+        await interaction.response.send_message("Cette commande est réservée aux salons de la catégorie Casino.", ephemeral=True)
+        return
+    if not has_casino_role(interaction):
+        await interaction.response.send_message("Vous n'avez pas le rôle Casino.", ephemeral=True)
+        return
+    if montant < 1:
+        await interaction.response.send_message("Le montant minimum est de 1€.", ephemeral=True)
+        return
+    if membre.id == interaction.user.id:
+        await interaction.response.send_message("Vous ne pouvez pas vous donner de l'argent à vous-même.", ephemeral=True)
+        return
+    data = get_user_data(interaction.user.id)
+    if data["pocket"] < montant:
+        await interaction.response.send_message("Vous n'avez pas assez d'argent en poche.", ephemeral=True)
+        return
+    data["pocket"] -= montant
+    set_user_data(interaction.user.id, pocket=data["pocket"])
+    # Ajouter au destinataire
+    dest_data = get_user_data(membre.id)
+    dest_data["pocket"] += montant
+    set_user_data(membre.id, pocket=dest_data["pocket"])
+    await interaction.response.send_message(f"Vous avez donné {montant}€ à {membre.mention}.")
+
+@argent.command(name="voler", description="Voler de l'argent en poche d'un membre (1 chance sur 3)")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+@app_commands.describe(membre="La victime", montant="Montant à voler")
+async def argent_voler(interaction: discord.Interaction, membre: discord.Member, montant: int):
+    if not in_command_category(interaction):
+        await interaction.response.send_message("Cette commande est réservée aux salons de la catégorie Casino.", ephemeral=True)
+        return
+    if not has_casino_role(interaction):
+        await interaction.response.send_message("Vous n'avez pas le rôle Casino.", ephemeral=True)
+        return
+    if montant <= 0:
+        await interaction.response.send_message("Le montant doit être positif.", ephemeral=True)
+        return
+    if membre.id == interaction.user.id:
+        await interaction.response.send_message("Vous ne pouvez pas vous voler vous-même.", ephemeral=True)
+        return
+    # Vérifier que la victime a assez d'argent en poche
+    victime_data = get_user_data(membre.id)
+    if victime_data["pocket"] < montant:
+        await interaction.response.send_message(f"{membre.mention} n'a pas assez d'argent en poche pour ce vol.", ephemeral=True)
+        return
+    # Vérifier que le voleur a assez pour la pénalité en cas d'échec (il perd le montant tenté)
+    voleur_data = get_user_data(interaction.user.id)
+    if voleur_data["pocket"] < montant:
+        await interaction.response.send_message("Vous n'avez pas assez d'argent pour couvrir la perte en cas d'échec.", ephemeral=True)
+        return
+    # Tirage au sort : 1/3 de réussite
+    if random.randint(1, 3) == 1:
+        # Réussite : voler le montant
+        victime_data["pocket"] -= montant
+        set_user_data(membre.id, pocket=victime_data["pocket"])
+        voleur_data["pocket"] += montant
+        set_user_data(interaction.user.id, pocket=voleur_data["pocket"])
+        await interaction.response.send_message(f"✅ Vous avez réussi à voler {montant}€ à {membre.mention} !")
+    else:
+        # Échec : perdre le montant (ajouté à la victime ? ou perdu ? Le texte dit "on perd la somme qu'on voulait voler" donc perdue pour le voleur, pas pour la victime)
+        # On enlève au voleur sans rien donner à la victime (l'argent est perdu)
+        voleur_data["pocket"] -= montant
+        set_user_data(interaction.user.id, pocket=voleur_data["pocket"])
+        await interaction.response.send_message(f"❌ Échec ! Vous avez perdu {montant}€ en tentant de voler {membre.mention}.")
