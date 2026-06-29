@@ -408,3 +408,108 @@ async def giveaway_loop():
             await channel.send("Personne n'a participé, dommage !")
     finally:
         giveaway_running = False
+
+# ================= PARTIE 6.1 =================
+# Jeu Mystère
+
+@bot.tree.command(name="jeux", description="Jeux de casino")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+async def jeux(interaction: discord.Interaction):
+    pass
+
+@jeux.command(name="mystere", description="Devinez si votre carte est plus haute que celle du bot")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+async def jeux_mystere(interaction: discord.Interaction):
+    if not in_command_category(interaction):
+        await interaction.response.send_message("Cette commande est réservée aux salons de la catégorie Casino.", ephemeral=True)
+        return
+    if not has_casino_role(interaction):
+        await interaction.response.send_message("Vous n'avez pas le rôle Casino.", ephemeral=True)
+        return
+    data = get_user_data(interaction.user.id)
+    total = data["pocket"] + data["bank"]
+    # Déterminer le pari requis
+    if total < 100:
+        await interaction.response.send_message("Vous devez avoir au moins 100€ pour jouer.", ephemeral=True)
+        return
+    elif 100 <= total <= 1000:
+        required_bet = 50
+    elif 1000 < total <= 5000:
+        required_bet = 150
+    else:
+        required_bet = 250
+    # Vérifier qu'il a assez en poche (car le pari est prélevé ? Non, le texte dit "parie une somme" mais le gain/perte sont fixes.
+    # On va exiger qu'il ait le required_bet en poche (comme mise de départ)
+    if data["pocket"] < required_bet:
+        await interaction.response.send_message(f"Vous devez avoir au moins {required_bet}€ en poche pour jouer.", ephemeral=True)
+        return
+    # On ne prélève pas la mise, on l'utilise comme condition.
+    # Générer les cartes
+    user_card = random.randint(1, 14)
+    bot_card = random.randint(1, 14)
+    # Afficher la carte du joueur
+    embed = discord.Embed(title="🃏 Carte mystère", description=f"Votre carte est : **{user_card}**\nDevinez : plus haute, plus basse ou égale ?", color=discord.Color.blue())
+    # Utiliser un view pour les choix
+    class MystereView(discord.ui.View):
+        def __init__(self, user_id, bot_card, required_bet):
+            super().__init__(timeout=60)
+            self.user_id = user_id
+            self.bot_card = bot_card
+            self.required_bet = required_bet
+            self.responded = False
+
+        @discord.ui.button(label="Plus haute", style=discord.ButtonStyle.green)
+        async def higher(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await self.process(interaction, "higher")
+
+        @discord.ui.button(label="Plus basse", style=discord.ButtonStyle.red)
+        async def lower(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await self.process(interaction, "lower")
+
+        @discord.ui.button(label="Égale", style=discord.ButtonStyle.grey)
+        async def equal(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await self.process(interaction, "equal")
+
+        async def process(self, interaction: discord.Interaction, guess):
+            if interaction.user.id != self.user_id:
+                await interaction.response.send_message("Ce n'est pas votre partie.", ephemeral=True)
+                return
+            if self.responded:
+                await interaction.response.send_message("Vous avez déjà répondu.", ephemeral=True)
+                return
+            self.responded = True
+            self.stop()
+            # Résultat
+            result = ""
+            if guess == "higher":
+                if self.bot_card > user_card:
+                    result = "perdu"
+                elif self.bot_card < user_card:
+                    result = "gagne"
+                else:
+                    result = "perdu"  # Égalité considérée comme perdue ?
+            elif guess == "lower":
+                if self.bot_card < user_card:
+                    result = "gagne"
+                else:
+                    result = "perdu"
+            else:  # equal
+                if self.bot_card == user_card:
+                    result = "gagne"
+                else:
+                    result = "perdu"
+            # Appliquer les gains/pertes
+            data = get_user_data(interaction.user.id)
+            if result == "gagne":
+                data["pocket"] += 100
+                msg = f"✅ La carte du bot était {self.bot_card}. Vous gagnez 100€ !"
+            else:
+                data["pocket"] -= 300
+                msg = f"❌ La carte du bot était {self.bot_card}. Vous perdez 300€."
+            set_user_data(interaction.user.id, pocket=data["pocket"])
+            await interaction.response.edit_message(content=msg, embed=None, view=None)
+
+    view = MystereView(interaction.user.id, bot_card, required_bet)
+    await interaction.response.send_message(embed=embed, view=view)
