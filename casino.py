@@ -582,3 +582,220 @@ async def jeux_coinflip(interaction: discord.Interaction, adversaire: discord.Me
     embed = discord.Embed(title="🪙 Défi Coinflip", description=f"{interaction.user.mention} défie {adversaire.mention} pour un pari de {montant}€ !", color=discord.Color.blue())
     view = CoinflipView(interaction.user, adversaire, montant)
     await interaction.response.send_message(embed=embed, view=view)
+
+# ================= PARTIE 6.3 =================
+# Duel (Pierre-Feuille-Ciseaux)
+
+class DuelView(discord.ui.View):
+    def __init__(self, challenger, opponent, amount):
+        super().__init__(timeout=60)
+        self.challenger = challenger
+        self.opponent = opponent
+        self.amount = amount
+        self.challenger_choice = None
+        self.opponent_choice = None
+
+    @discord.ui.button(label="Pierre", style=discord.ButtonStyle.secondary)
+    async def rock(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.set_choice(interaction, "pierre")
+
+    @discord.ui.button(label="Feuille", style=discord.ButtonStyle.secondary)
+    async def paper(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.set_choice(interaction, "feuille")
+
+    @discord.ui.button(label="Ciseaux", style=discord.ButtonStyle.secondary)
+    async def scissors(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.set_choice(interaction, "ciseaux")
+
+    async def set_choice(self, interaction: discord.Interaction, choice):
+        if interaction.user.id not in [self.challenger.id, self.opponent.id]:
+            await interaction.response.send_message("Vous ne participez pas à ce duel.", ephemeral=True)
+            return
+        if interaction.user.id == self.challenger.id:
+            if self.challenger_choice is not None:
+                await interaction.response.send_message("Vous avez déjà choisi.", ephemeral=True)
+                return
+            self.challenger_choice = choice
+        else:
+            if self.opponent_choice is not None:
+                await interaction.response.send_message("Vous avez déjà choisi.", ephemeral=True)
+                return
+            self.opponent_choice = choice
+        await interaction.response.send_message(f"Vous avez choisi {choice}.", ephemeral=True)
+        if self.challenger_choice and self.opponent_choice:
+            self.stop()
+            # Déterminer le gagnant
+            winner = None
+            if self.challenger_choice == self.opponent_choice:
+                winner = "draw"
+            elif (self.challenger_choice == "pierre" and self.opponent_choice == "ciseaux") or \
+                 (self.challenger_choice == "feuille" and self.opponent_choice == "pierre") or \
+                 (self.challenger_choice == "ciseaux" and self.opponent_choice == "feuille"):
+                winner = self.challenger
+            else:
+                winner = self.opponent
+            # Appliquer les gains
+            if winner == "draw":
+                # Rendre les mises
+                chal_data = get_user_data(self.challenger.id)
+                chal_data["pocket"] += self.amount
+                set_user_data(self.challenger.id, pocket=chal_data["pocket"])
+                opp_data = get_user_data(self.opponent.id)
+                opp_data["pocket"] += self.amount
+                set_user_data(self.opponent.id, pocket=opp_data["pocket"])
+                await interaction.channel.send("Égalité ! Les mises sont remboursées.")
+            else:
+                loser = self.challenger if winner == self.opponent else self.opponent
+                loser_data = get_user_data(loser.id)
+                loser_data["pocket"] -= self.amount
+                set_user_data(loser.id, pocket=loser_data["pocket"])
+                winner_data = get_user_data(winner.id)
+                winner_data["pocket"] += self.amount * 2
+                set_user_data(winner.id, pocket=winner_data["pocket"])
+                await interaction.channel.send(f"{winner.mention} remporte le duel et gagne {self.amount*2}€ !")
+
+@jeux.command(name="duel", description="Défiez un autre joueur à Pierre-Feuille-Ciseaux")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+@app_commands.describe(adversaire="Le joueur à défier", montant="Montant à parier")
+async def jeux_duel(interaction: discord.Interaction, adversaire: discord.Member, montant: int):
+    if not in_command_category(interaction):
+        await interaction.response.send_message("Cette commande est réservée aux salons de la catégorie Casino.", ephemeral=True)
+        return
+    if not has_casino_role(interaction):
+        await interaction.response.send_message("Vous n'avez pas le rôle Casino.", ephemeral=True)
+        return
+    if montant < 10:
+        await interaction.response.send_message("Le montant minimum est de 10€.", ephemeral=True)
+        return
+    if adversaire.id == interaction.user.id:
+        await interaction.response.send_message("Vous ne pouvez pas vous défier vous-même.", ephemeral=True)
+        return
+    data = get_user_data(interaction.user.id)
+    if data["pocket"] < montant:
+        await interaction.response.send_message("Vous n'avez pas assez d'argent.", ephemeral=True)
+        return
+    if CASINO_ROLE_ID not in [r.id for r in adversaire.roles]:
+        await interaction.response.send_message("L'adversaire n'a pas le rôle Casino.", ephemeral=True)
+        return
+    # Vérifier que l'adversaire a assez
+    opp_data = get_user_data(adversaire.id)
+    if opp_data["pocket"] < montant:
+        await interaction.response.send_message("L'adversaire n'a pas assez d'argent.", ephemeral=True)
+        return
+    # Prélever les mises tout de suite
+    data["pocket"] -= montant
+    set_user_data(interaction.user.id, pocket=data["pocket"])
+    opp_data["pocket"] -= montant
+    set_user_data(adversaire.id, pocket=opp_data["pocket"])
+    embed = discord.Embed(title="⚔️ Duel", description=f"{interaction.user.mention} vs {adversaire.mention}\nPari : {montant}€\nChoisissez votre coup !", color=discord.Color.red())
+    view = DuelView(interaction.user, adversaire, montant)
+    await interaction.response.send_message(embed=embed, view=view)
+
+# ================= PARTIE 6.4 =================
+# Team Fight (5v5)
+
+class TeamFightView(discord.ui.View):
+    def __init__(self, creator, team_size):
+        super().__init__(timeout=120)
+        self.creator = creator
+        self.team1 = [creator]
+        self.team2 = []
+        self.team_size = team_size
+        self.bets = {}  # user_id -> bet
+        self.started = False
+
+    @discord.ui.button(label="Rejoindre Équipe 1", style=discord.ButtonStyle.blurple)
+    async def join_team1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.started:
+            await interaction.response.send_message("La partie a déjà commencé.", ephemeral=True)
+            return
+        if interaction.user.id in [m.id for m in self.team1 + self.team2]:
+            await interaction.response.send_message("Vous êtes déjà dans une équipe.", ephemeral=True)
+            return
+        if len(self.team1) >= self.team_size:
+            await interaction.response.send_message("L'équipe 1 est pleine.", ephemeral=True)
+            return
+        self.team1.append(interaction.user)
+        await interaction.response.send_message(f"Vous avez rejoint l'équipe 1 ! ({len(self.team1)}/{self.team_size})", ephemeral=True)
+        await self.check_start()
+
+    @discord.ui.button(label="Rejoindre Équipe 2", style=discord.ButtonStyle.green)
+    async def join_team2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.started:
+            await interaction.response.send_message("La partie a déjà commencé.", ephemeral=True)
+            return
+        if interaction.user.id in [m.id for m in self.team1 + self.team2]:
+            await interaction.response.send_message("Vous êtes déjà dans une équipe.", ephemeral=True)
+            return
+        if len(self.team2) >= self.team_size:
+            await interaction.response.send_message("L'équipe 2 est pleine.", ephemeral=True)
+            return
+        self.team2.append(interaction.user)
+        await interaction.response.send_message(f"Vous avez rejoint l'équipe 2 ! ({len(self.team2)}/{self.team_size})", ephemeral=True)
+        await self.check_start()
+
+    async def check_start(self):
+        if len(self.team1) == self.team_size and len(self.team2) == self.team_size:
+            self.started = True
+            # Demander les mises à chaque joueur (ils doivent tous miser la même chose)
+            # On va définir une mise de base de 50€ pour simplifier
+            bet = 50
+            # Vérifier que tous ont assez
+            for member in self.team1 + self.team2:
+                data = get_user_data(member.id)
+                if data["pocket"] < bet:
+                    await self.message.channel.send(f"{member.mention} n'a pas assez d'argent (besoin de {bet}€). Annulation.")
+                    self.stop()
+                    return
+            # Prélever les mises
+            for member in self.team1 + self.team2:
+                data = get_user_data(member.id)
+                data["pocket"] -= bet
+                set_user_data(member.id, pocket=data["pocket"])
+            # Lancer le combat : chaque équipe tire un nombre aléatoire, la somme détermine le gagnant
+            team1_score = sum(random.randint(1, 10) for _ in self.team1)
+            team2_score = sum(random.randint(1, 10) for _ in self.team2)
+            total_bet = bet * len(self.team1 + self.team2)
+            if team1_score > team2_score:
+                winner_team = self.team1
+            elif team2_score > team1_score:
+                winner_team = self.team2
+            else:
+                # Égalité, remboursement
+                for member in self.team1 + self.team2:
+                    data = get_user_data(member.id)
+                    data["pocket"] += bet
+                    set_user_data(member.id, pocket=data["pocket"])
+                await self.message.channel.send(f"⚔️ Combat terminé ! Égalité ({team1_score} - {team2_score}), les mises sont remboursées.")
+                self.stop()
+                return
+            # Distribuer les gains (total_bet) aux gagnants
+            win_per_player = total_bet // len(winner_team)
+            for member in winner_team:
+                data = get_user_data(member.id)
+                data["pocket"] += win_per_player
+                set_user_data(member.id, pocket=data["pocket"])
+            await self.message.channel.send(f"⚔️ L'équipe {winner_team[0].mention} et co. remporte le combat ! Chaque gagnant reçoit {win_per_player}€.")
+            self.stop()
+
+    async def on_timeout(self):
+        if not self.started:
+            await self.message.channel.send("Temps écoulé, la partie est annulée.")
+            # Rembourser ceux qui ont misé ? Mais on n'a pas encore prélevé.
+            self.stop()
+
+@jeux.command(name="teamfight", description="Combat 5v5 avec mise de 50€ par joueur")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+async def jeux_teamfight(interaction: discord.Interaction):
+    if not in_command_category(interaction):
+        await interaction.response.send_message("Cette commande est réservée aux salons de la catégorie Casino.", ephemeral=True)
+        return
+    if not has_casino_role(interaction):
+        await interaction.response.send_message("Vous n'avez pas le rôle Casino.", ephemeral=True)
+        return
+    view = TeamFightView(interaction.user, 5)
+    embed = discord.Embed(title="⚔️ Team Fight 5v5", description=f"{interaction.user.mention} a créé un combat !\nChaque joueur mise 50€.\nRejoignez une équipe en cliquant ci-dessous.", color=discord.Color.orange())
+    msg = await interaction.response.send_message(embed=embed, view=view)
+    view.message = msg
