@@ -96,3 +96,71 @@ async def on_ready():
     except Exception as e:
         print(f"Erreur de synchronisation : {e}")
     giveaway_loop.start()
+
+# ================= PARTIE 2 =================
+# Commandes du groupe /jouer
+
+class AcceptView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="J'accepte les règles", style=discord.ButtonStyle.success, custom_id="accept_rules")
+    async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        role = interaction.guild.get_role(CASINO_ROLE_ID)
+        if role is None:
+            await interaction.response.send_message("Le rôle Casino n'existe pas.", ephemeral=True)
+            return
+        if role in interaction.user.roles:
+            await interaction.response.send_message("Vous avez déjà ce rôle.", ephemeral=True)
+            return
+        await interaction.user.add_roles(role)
+        # Initialiser le compte à 100€ en poche
+        user_data = get_user_data(interaction.user.id)
+        if user_data["pocket"] == 0 and user_data["bank"] == 0:
+            set_user_data(interaction.user.id, pocket=100, bank=0)
+        await interaction.response.send_message(f"Félicitations ! Vous avez reçu le rôle {role.mention} et 100€ ont été ajoutés à votre compte.", ephemeral=True)
+
+@bot.tree.command(name="jouer", description="Commandes pour gérer le casino")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+async def jouer(interaction: discord.Interaction):
+    # Cette commande est un groupe, on utilise des sous-commandes
+    pass
+
+@jouer.command(name="role", description="Donner le rôle Casino avec message d'acceptation (admin uniquement)")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+async def jouer_role(interaction: discord.Interaction):
+    if not is_admin(interaction):
+        await interaction.response.send_message("Vous n'avez pas la permission d'utiliser cette commande.", ephemeral=True)
+        return
+    embed = discord.Embed(
+        title="⚠️ Avertissement Casino",
+        description="En acceptant ce rôle, vous pourrez participer aux jeux d'argent du serveur.\n"
+                    "Vous devez vous contrôler et jouer de manière responsable.\n"
+                    "Si vous perdez trop, vous pourrez demander à un admin de vous retirer.\n"
+                    "En cliquant sur le bouton ci-dessous, vous acceptez ces conditions.",
+        color=discord.Color.orange()
+    )
+    view = AcceptView()
+    await interaction.response.send_message(embed=embed, view=view)
+
+@jouer.command(name="enlever", description="Retirer un membre du casino (admin uniquement)")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+@app_commands.describe(membre="Le membre à retirer")
+async def jouer_enlever(interaction: discord.Interaction, membre: discord.Member):
+    if not is_admin(interaction):
+        await interaction.response.send_message("Vous n'avez pas la permission.", ephemeral=True)
+        return
+    role = interaction.guild.get_role(CASINO_ROLE_ID)
+    if role not in membre.roles:
+        await interaction.response.send_message(f"{membre.mention} n'a pas le rôle Casino.", ephemeral=True)
+        return
+    await membre.remove_roles(role)
+    # Supprimer les données économiques (réinitialisation)
+    user_id = str(membre.id)
+    if user_id in economy:
+        del economy[user_id]
+        save_data(economy)
+    await interaction.response.send_message(f"{membre.mention} a été retiré du casino et ses données ont été effacées.", ephemeral=True)
