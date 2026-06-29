@@ -799,3 +799,434 @@ async def jeux_teamfight(interaction: discord.Interaction):
     embed = discord.Embed(title="⚔️ Team Fight 5v5", description=f"{interaction.user.mention} a créé un combat !\nChaque joueur mise 50€.\nRejoignez une équipe en cliquant ci-dessous.", color=discord.Color.orange())
     msg = await interaction.response.send_message(embed=embed, view=view)
     view.message = msg
+
+# ================= PARTIE 6.5 =================
+# Team Quiz (équipe, max 5v5)
+
+class TeamQuizView(discord.ui.View):
+    def __init__(self, creator, team_size):
+        super().__init__(timeout=120)
+        self.creator = creator
+        self.team1 = [creator]
+        self.team2 = []
+        self.team_size = team_size
+        self.started = False
+        self.question = None
+        self.answers = {}
+        self.correct_answer = None
+
+    @discord.ui.button(label="Rejoindre Équipe 1", style=discord.ButtonStyle.blurple)
+    async def join_team1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.started:
+            await interaction.response.send_message("La partie a déjà commencé.", ephemeral=True)
+            return
+        if interaction.user.id in [m.id for m in self.team1 + self.team2]:
+            await interaction.response.send_message("Vous êtes déjà dans une équipe.", ephemeral=True)
+            return
+        if len(self.team1) >= self.team_size:
+            await interaction.response.send_message("L'équipe 1 est pleine.", ephemeral=True)
+            return
+        self.team1.append(interaction.user)
+        await interaction.response.send_message(f"Vous avez rejoint l'équipe 1 ! ({len(self.team1)}/{self.team_size})", ephemeral=True)
+        await self.check_start()
+
+    @discord.ui.button(label="Rejoindre Équipe 2", style=discord.ButtonStyle.green)
+    async def join_team2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.started:
+            await interaction.response.send_message("La partie a déjà commencé.", ephemeral=True)
+            return
+        if interaction.user.id in [m.id for m in self.team1 + self.team2]:
+            await interaction.response.send_message("Vous êtes déjà dans une équipe.", ephemeral=True)
+            return
+        if len(self.team2) >= self.team_size:
+            await interaction.response.send_message("L'équipe 2 est pleine.", ephemeral=True)
+            return
+        self.team2.append(interaction.user)
+        await interaction.response.send_message(f"Vous avez rejoint l'équipe 2 ! ({len(self.team2)}/{self.team_size})", ephemeral=True)
+        await self.check_start()
+
+    async def check_start(self):
+        if len(self.team1) == self.team_size and len(self.team2) == self.team_size:
+            self.started = True
+            # Chaque joueur mise 30€
+            bet = 30
+            for member in self.team1 + self.team2:
+                data = get_user_data(member.id)
+                if data["pocket"] < bet:
+                    await self.message.channel.send(f"{member.mention} n'a pas assez d'argent (besoin de {bet}€). Annulation.")
+                    self.stop()
+                    return
+            # Prélever les mises
+            for member in self.team1 + self.team2:
+                data = get_user_data(member.id)
+                data["pocket"] -= bet
+                set_user_data(member.id, pocket=data["pocket"])
+            # Poser une question (simple QCM)
+            await self.ask_question()
+
+    async def ask_question(self):
+        # Liste de questions (par simplicité, on en génère une)
+        questions = [
+            {"question": "Quelle est la capitale de la France ?", "options": ["Paris", "Londres", "Berlin", "Madrid"], "answer": 0},
+            {"question": "Combien font 2 + 2 ?", "options": ["3", "4", "5", "6"], "answer": 1},
+            {"question": "Qui a écrit 'Les Misérables' ?", "options": ["Victor Hugo", "Emile Zola", "Gustave Flaubert", "Molière"], "answer": 0},
+            {"question": "Quel est le plus grand océan ?", "options": ["Atlantique", "Pacifique", "Indien", "Arctique"], "answer": 1},
+        ]
+        q = random.choice(questions)
+        self.question = q["question"]
+        self.correct_answer = q["answer"]
+        options = q["options"]
+        embed = discord.Embed(title="📝 Team Quiz", description=f"Question : {self.question}\n\nÉquipe 1 : {', '.join([m.mention for m in self.team1])}\nÉquipe 2 : {', '.join([m.mention for m in self.team2])}\nChaque équipe doit choisir une réponse en cliquant sur le bouton correspondant (la première réponse de l'équipe sera prise).", color=discord.Color.blue())
+        # Créer des boutons pour les options
+        view = discord.ui.View(timeout=30)
+        self.answers = {}
+
+        async def option_callback(interaction: discord.Interaction, opt_index):
+            if interaction.user.id not in [m.id for m in self.team1 + self.team2]:
+                await interaction.response.send_message("Vous ne faites pas partie d'une équipe.", ephemeral=True)
+                return
+            # Déterminer l'équipe du joueur
+            team = None
+            if interaction.user in self.team1:
+                team = 1
+            else:
+                team = 2
+            if team in self.answers:
+                await interaction.response.send_message("Votre équipe a déjà répondu.", ephemeral=True)
+                return
+            self.answers[team] = opt_index
+            await interaction.response.send_message(f"Équipe {team} a choisi l'option {opt_index+1}.", ephemeral=True)
+            if len(self.answers) == 2:
+                # Les deux équipes ont répondu
+                view.stop()
+                # Comparer
+                result = []
+                for team_idx in [1, 2]:
+                    if self.answers.get(team_idx) == self.correct_answer:
+                        result.append(team_idx)
+                if len(result) == 2:
+                    # Égalité, remboursement
+                    for member in self.team1 + self.team2:
+                        data = get_user_data(member.id)
+                        data["pocket"] += bet
+                        set_user_data(member.id, pocket=data["pocket"])
+                    await interaction.channel.send("Les deux équipes ont juste ! Les mises sont remboursées.")
+                elif len(result) == 1:
+                    winner_team = self.team1 if result[0] == 1 else self.team2
+                    total_bet = bet * len(self.team1 + self.team2)
+                    win_per_player = total_bet // len(winner_team)
+                    for member in winner_team:
+                        data = get_user_data(member.id)
+                        data["pocket"] += win_per_player
+                        set_user_data(member.id, pocket=data["pocket"])
+                    await interaction.channel.send(f"L'équipe {winner_team[0].mention} et co. remporte le quiz ! Chaque gagnant reçoit {win_per_player}€.")
+                else:
+                    # Aucune équipe n'a juste, les mises sont perdues (personne ne gagne)
+                    await interaction.channel.send("Aucune équipe n'a trouvé la bonne réponse. Les mises sont perdues.")
+                self.stop()
+
+        for i, opt in enumerate(options):
+            button = discord.ui.Button(label=opt, style=discord.ButtonStyle.secondary, custom_id=f"quiz_{i}")
+            button.callback = lambda inter, i=i: option_callback(inter, i)
+            view.add_item(button)
+
+        # Envoyer le message avec les boutons
+        await self.message.channel.send(embed=embed, view=view)
+
+@jeux.command(name="teamquiz", description="Quiz en équipe (max 5v5, mise 30€)")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+async def jeux_teamquiz(interaction: discord.Interaction):
+    if not in_command_category(interaction):
+        await interaction.response.send_message("Cette commande est réservée aux salons de la catégorie Casino.", ephemeral=True)
+        return
+    if not has_casino_role(interaction):
+        await interaction.response.send_message("Vous n'avez pas le rôle Casino.", ephemeral=True)
+        return
+    view = TeamQuizView(interaction.user, 5)
+    embed = discord.Embed(title="📝 Team Quiz", description=f"{interaction.user.mention} a créé un quiz en équipe !\nChaque joueur mise 30€.\nRejoignez une équipe ci-dessous.", color=discord.Color.orange())
+    msg = await interaction.response.send_message(embed=embed, view=view)
+    view.message = msg
+
+# ================= PARTIE 6.6 =================
+# Jeu UNO (version simplifiée mais complète)
+
+# États de jeu UNO stockés dans game_states
+# Structure : { "uno_<channel_id>": { "players": [id], "current_player": index, "direction": 1, "top_card": {...}, "hands": {id: [...]}, "deck": [...], "draw_count": 0 } }
+
+def create_uno_deck():
+    colors = ["rouge", "bleu", "vert", "jaune"]
+    values = ["0","1","2","3","4","5","6","7","8","9","+2","+4","inversion","passe"]
+    deck = []
+    for color in colors:
+        for value in values:
+            deck.append({"color": color, "value": value})
+            if value != "0":
+                deck.append({"color": color, "value": value})  # double pour les cartes non-0
+    # Cartes jokers (+4, changement de couleur)
+    for _ in range(4):
+        deck.append({"color": "joker", "value": "+4"})
+        deck.append({"color": "joker", "value": "changement"})
+    random.shuffle(deck)
+    return deck
+
+def get_uno_card_emoji(card):
+    # Retourne une représentation textuelle (on peut utiliser des émojis)
+    if card["color"] == "joker":
+        return "🃏"
+    colors_emoji = {"rouge": "🔴", "bleu": "🔵", "vert": "🟢", "jaune": "🟡"}
+    return f"{colors_emoji.get(card['color'], '')} {card['value']}"
+
+@jeux.command(name="uno", description="Jouer à UNO (créer ou rejoindre une partie)")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+async def jeux_uno(interaction: discord.Interaction):
+    if not in_command_category(interaction):
+        await interaction.response.send_message("Cette commande est réservée aux salons de la catégorie Casino.", ephemeral=True)
+        return
+    if not has_casino_role(interaction):
+        await interaction.response.send_message("Vous n'avez pas le rôle Casino.", ephemeral=True)
+        return
+    # Vérifier si une partie existe déjà dans ce salon
+    channel_id = str(interaction.channel_id)
+    if f"uno_{channel_id}" in game_states:
+        await interaction.response.send_message("Une partie de UNO est déjà en cours dans ce salon.", ephemeral=True)
+        return
+    # Créer une partie
+    deck = create_uno_deck()
+    # Distribuer 7 cartes à chaque joueur
+    players = [interaction.user.id]
+    hands = {interaction.user.id: []}
+    for _ in range(7):
+        hands[interaction.user.id].append(deck.pop())
+    # Poser la première carte (non-joker)
+    top_card = None
+    while top_card is None or top_card["color"] == "joker":
+        top_card = deck.pop()
+    game_states[f"uno_{channel_id}"] = {
+        "players": players,
+        "current_player": 0,
+        "direction": 1,
+        "top_card": top_card,
+        "hands": hands,
+        "deck": deck,
+        "draw_count": 0
+    }
+    save_games(game_states)
+    embed = discord.Embed(title="🃏 UNO - Partie créée", description=f"Joueur : {interaction.user.mention}\nCarte du dessus : {get_uno_card_emoji(top_card)}\n\nUtilisez les commandes suivantes :\n`/uno rejoindre` pour rejoindre\n`/uno piocher` pour piocher une carte\n`/uno jouer [couleur] [valeur]` pour jouer une carte\n`/uno passer` pour passer votre tour (si vous ne pouvez pas jouer)\n`/uno couleur [couleur]` pour changer la couleur (sur joker)", color=discord.Color.green())
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="uno", description="Commandes pour le jeu UNO")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+async def uno(interaction: discord.Interaction):
+    pass
+
+@uno.command(name="rejoindre", description="Rejoindre une partie UNO en cours")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+async def uno_rejoindre(interaction: discord.Interaction):
+    if not in_command_category(interaction):
+        await interaction.response.send_message("Cette commande est réservée aux salons de la catégorie Casino.", ephemeral=True)
+        return
+    if not has_casino_role(interaction):
+        await interaction.response.send_message("Vous n'avez pas le rôle Casino.", ephemeral=True)
+        return
+    channel_id = str(interaction.channel_id)
+    state_key = f"uno_{channel_id}"
+    if state_key not in game_states:
+        await interaction.response.send_message("Aucune partie UNO en cours dans ce salon. Créez-en une avec `/jeux uno`.", ephemeral=True)
+        return
+    state = game_states[state_key]
+    if interaction.user.id in state["players"]:
+        await interaction.response.send_message("Vous êtes déjà dans la partie.", ephemeral=True)
+        return
+    if len(state["players"]) >= 10:  # limite
+        await interaction.response.send_message("La partie est pleine (max 10 joueurs).", ephemeral=True)
+        return
+    state["players"].append(interaction.user.id)
+    state["hands"][interaction.user.id] = []
+    for _ in range(7):
+        state["hands"][interaction.user.id].append(state["deck"].pop())
+    save_games(game_states)
+    await interaction.response.send_message(f"{interaction.user.mention} a rejoint la partie UNO !")
+
+@uno.command(name="piocher", description="Piocher une carte")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+async def uno_piocher(interaction: discord.Interaction):
+    channel_id = str(interaction.channel_id)
+    state_key = f"uno_{channel_id}"
+    if state_key not in game_states:
+        await interaction.response.send_message("Aucune partie UNO.", ephemeral=True)
+        return
+    state = game_states[state_key]
+    if interaction.user.id != state["players"][state["current_player"]]:
+        await interaction.response.send_message("Ce n'est pas votre tour.", ephemeral=True)
+        return
+    # Piocher une carte
+    if not state["deck"]:
+        # Mélanger la défausse (sauf la carte du dessus)
+        top = state["top_card"]
+        discard = [top]
+        # Récupérer toutes les cartes des mains ? Non, on ne peut pas.
+        # Dans UNO classique, on remélange les cartes jouées sauf la dernière.
+        # On n'a pas de pile de défausse séparée, on va simplement reconstituer le deck avec des nouvelles cartes.
+        # Simplification : on recrée un deck complet et on redistribue ? C'est lourd.
+        # On va juste ajouter des cartes aléatoires.
+        for _ in range(50):
+            state["deck"].append({"color": random.choice(["rouge","bleu","vert","jaune"]), "value": random.choice(["1","2","3","4","5","6","7","8","9","+2","inversion","passe"])})
+        random.shuffle(state["deck"])
+    card = state["deck"].pop()
+    state["hands"][interaction.user.id].append(card)
+    save_games(game_states)
+    await interaction.response.send_message(f"Vous avez pioché : {get_uno_card_emoji(card)}", ephemeral=True)
+    # Vérifier si la carte peut être jouée
+    # On laisse le joueur décider s'il veut la jouer avec /uno jouer
+    await interaction.followup.send("Vous pouvez maintenant jouer cette carte avec `/uno jouer` ou passer votre tour.")
+
+@uno.command(name="jouer", description="Jouer une carte de votre main")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.describe(couleur="Couleur de la carte", valeur="Valeur de la carte")
+async def uno_jouer(interaction: discord.Interaction, couleur: str, valeur: str):
+    channel_id = str(interaction.channel_id)
+    state_key = f"uno_{channel_id}"
+    if state_key not in game_states:
+        await interaction.response.send_message("Aucune partie UNO.", ephemeral=True)
+        return
+    state = game_states[state_key]
+    if interaction.user.id != state["players"][state["current_player"]]:
+        await interaction.response.send_message("Ce n'est pas votre tour.", ephemeral=True)
+        return
+    hand = state["hands"][interaction.user.id]
+    # Trouver la carte
+    card = None
+    for c in hand:
+        if c["color"] == couleur and c["value"] == valeur:
+            card = c
+            break
+    if card is None:
+        await interaction.response.send_message("Vous n'avez pas cette carte dans votre main.", ephemeral=True)
+        return
+    # Vérifier si la carte est jouable
+    top = state["top_card"]
+    if couleur == "joker" or top["color"] == "joker" or couleur == top["color"] or valeur == top["value"]:
+        # Jouable
+        hand.remove(card)
+        state["top_card"] = card
+        # Appliquer les effets
+        await apply_uno_effect(interaction, state, card)
+        # Passer au joueur suivant
+        state["current_player"] = (state["current_player"] + state["direction"]) % len(state["players"])
+        # Vérifier si le joueur a gagné (plus de cartes)
+        if not state["hands"][interaction.user.id]:
+            await interaction.channel.send(f"🎉 {interaction.user.mention} a gagné la partie UNO !")
+            del game_states[state_key]
+            save_games(game_states)
+            return
+        save_games(game_states)
+        # Afficher la nouvelle carte
+        embed = discord.Embed(title="🃏 UNO", description=f"{interaction.user.mention} a joué : {get_uno_card_emoji(card)}\nCarte du dessus : {get_uno_card_emoji(state['top_card'])}\nTour suivant : {state['players'][state['current_player']].mention}", color=discord.Color.blue())
+        await interaction.response.send_message(embed=embed)
+    else:
+        await interaction.response.send_message("Cette carte n'est pas jouable.", ephemeral=True)
+
+async def apply_uno_effect(interaction, state, card):
+    if card["value"] == "+2":
+        # Le joueur suivant pioche 2 cartes
+        next_player_idx = (state["current_player"] + state["direction"]) % len(state["players"])
+        next_player = state["players"][next_player_idx]
+        for _ in range(2):
+            if state["deck"]:
+                state["hands"][next_player].append(state["deck"].pop())
+        await interaction.channel.send(f"{state['players'][next_player_idx].mention} pioche 2 cartes !")
+    elif card["value"] == "+4":
+        # Joker +4 : le joueur suivant pioche 4 cartes
+        next_player_idx = (state["current_player"] + state["direction"]) % len(state["players"])
+        next_player = state["players"][next_player_idx]
+        for _ in range(4):
+            if state["deck"]:
+                state["hands"][next_player].append(state["deck"].pop())
+        await interaction.channel.send(f"{state['players'][next_player_idx].mention} pioche 4 cartes !")
+    elif card["value"] == "inversion":
+        state["direction"] *= -1
+    elif card["value"] == "passe":
+        # Sauter le joueur suivant
+        state["current_player"] = (state["current_player"] + state["direction"]) % len(state["players"])
+    elif card["value"] == "changement":
+        # Le joueur peut choisir une couleur via /uno couleur
+        await interaction.channel.send(f"{interaction.user.mention} a joué un joker changement de couleur. Utilisez `/uno couleur [couleur]` pour choisir.")
+
+@uno.command(name="couleur", description="Choisir la couleur après un joker")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.describe(couleur="Nouvelle couleur (rouge, bleu, vert, jaune)")
+async def uno_couleur(interaction: discord.Interaction, couleur: str):
+    channel_id = str(interaction.channel_id)
+    state_key = f"uno_{channel_id}"
+    if state_key not in game_states:
+        await interaction.response.send_message("Aucune partie UNO.", ephemeral=True)
+        return
+    state = game_states[state_key]
+    if interaction.user.id != state["players"][state["current_player"]]:
+        await interaction.response.send_message("Ce n'est pas votre tour.", ephemeral=True)
+        return
+    if state["top_card"]["value"] != "changement" and state["top_card"]["color"] != "joker":
+        await interaction.response.send_message("La carte du dessus n'est pas un joker changement.", ephemeral=True)
+        return
+    if couleur not in ["rouge", "bleu", "vert", "jaune"]:
+        await interaction.response.send_message("Couleur invalide. Choisissez parmi : rouge, bleu, vert, jaune.", ephemeral=True)
+        return
+    state["top_card"]["color"] = couleur
+    # Passer au joueur suivant
+    state["current_player"] = (state["current_player"] + state["direction"]) % len(state["players"])
+    save_games(game_states)
+    await interaction.response.send_message(f"La couleur a été changée en {couleur}. Tour suivant : {state['players'][state['current_player']].mention}")
+
+@uno.command(name="passer", description="Passer votre tour (si vous ne pouvez pas jouer)")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+async def uno_passer(interaction: discord.Interaction):
+    channel_id = str(interaction.channel_id)
+    state_key = f"uno_{channel_id}"
+    if state_key not in game_states:
+        await interaction.response.send_message("Aucune partie UNO.", ephemeral=True)
+        return
+    state = game_states[state_key]
+    if interaction.user.id != state["players"][state["current_player"]]:
+        await interaction.response.send_message("Ce n'est pas votre tour.", ephemeral=True)
+        return
+    # Passer au joueur suivant
+    state["current_player"] = (state["current_player"] + state["direction"]) % len(state["players"])
+    save_games(game_states)
+    await interaction.response.send_message(f"{interaction.user.mention} a passé son tour. Tour suivant : {state['players'][state['current_player']].mention}")
+
+# ================= PARTIE 7 =================
+# Commandes admin
+
+@bot.tree.command(name="admin", description="Commandes d'administration (admin uniquement)")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+async def admin(interaction: discord.Interaction):
+    pass
+
+@admin.command(name="argent", description="Ajouter ou retirer de l'argent à un membre")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+@app_commands.describe(action="Ajouter ou retirer", membre="Le membre concerné", montant="Montant")
+async def admin_argent(interaction: discord.Interaction, action: str, membre: discord.Member, montant: int):
+    if not is_admin(interaction):
+        await interaction.response.send_message("Vous n'avez pas la permission.", ephemeral=True)
+        return
+    if action not in ["ajouter", "retirer"]:
+        await interaction.response.send_message("Action doit être 'ajouter' ou 'retirer'.", ephemeral=True)
+        return
+    if montant <= 0:
+        await interaction.response.send_message("Le montant doit être positif.", ephemeral=True)
+        return
+    data = get_user_data(membre.id)
+    if action == "ajouter":
+        data["pocket"] += montant
+    else:
+        if data["pocket"] < montant:
+            await interaction.response.send_message(f"{membre.mention} n'a pas assez d'argent en poche.", ephemeral=True)
+            return
+        data["pocket"] -= montant
+    set_user_data(membre.id, pocket=data["pocket"])
+    await interaction.response.send_message(f"{action.capitalize()} {montant}€ à {membre.mention} (poche). Nouveau solde : {data['pocket']}€.")
