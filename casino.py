@@ -164,3 +164,120 @@ async def jouer_enlever(interaction: discord.Interaction, membre: discord.Member
         del economy[user_id]
         save_data(economy)
     await interaction.response.send_message(f"{membre.mention} a été retiré du casino et ses données ont été effacées.", ephemeral=True)
+
+# ================= PARTIE 3 =================
+# Commandes du groupe /banque
+
+@bot.tree.command(name="banque", description="Gestion de votre banque")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+async def banque(interaction: discord.Interaction):
+    pass
+
+@banque.command(name="voir", description="Voir votre argent en poche et en banque")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+async def banque_voir(interaction: discord.Interaction):
+    if not in_command_category(interaction):
+        await interaction.response.send_message("Cette commande est réservée aux salons de la catégorie Casino.", ephemeral=True)
+        return
+    if not has_casino_role(interaction):
+        await interaction.response.send_message("Vous n'avez pas le rôle Casino.", ephemeral=True)
+        return
+    data = get_user_data(interaction.user.id)
+    embed = discord.Embed(title="Votre situation financière", color=discord.Color.green())
+    embed.add_field(name="Argent en poche", value=f"{data['pocket']}€", inline=True)
+    embed.add_field(name="Argent en banque", value=f"{data['bank']}€", inline=True)
+    embed.add_field(name="Total", value=f"{data['pocket'] + data['bank']}€", inline=False)
+    await interaction.response.send_message(embed=embed)
+
+@banque.command(name="depot", description="Déposer de l'argent en banque")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+@app_commands.describe(montant="Montant à déposer")
+async def banque_depot(interaction: discord.Interaction, montant: int):
+    if not in_command_category(interaction):
+        await interaction.response.send_message("Cette commande est réservée aux salons de la catégorie Casino.", ephemeral=True)
+        return
+    if not has_casino_role(interaction):
+        await interaction.response.send_message("Vous n'avez pas le rôle Casino.", ephemeral=True)
+        return
+    if montant <= 0:
+        await interaction.response.send_message("Le montant doit être positif.", ephemeral=True)
+        return
+    data = get_user_data(interaction.user.id)
+    if data["pocket"] < montant:
+        await interaction.response.send_message("Vous n'avez pas assez d'argent en poche.", ephemeral=True)
+        return
+    data["pocket"] -= montant
+    data["bank"] += montant
+    set_user_data(interaction.user.id, pocket=data["pocket"], bank=data["bank"])
+    await interaction.response.send_message(f"Vous avez déposé {montant}€ en banque. Nouveau solde en poche : {data['pocket']}€, banque : {data['bank']}€.")
+
+@banque.command(name="retrait", description="Retirer de l'argent de la banque")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+@app_commands.describe(montant="Montant à retirer")
+async def banque_retrait(interaction: discord.Interaction, montant: int):
+    if not in_command_category(interaction):
+        await interaction.response.send_message("Cette commande est réservée aux salons de la catégorie Casino.", ephemeral=True)
+        return
+    if not has_casino_role(interaction):
+        await interaction.response.send_message("Vous n'avez pas le rôle Casino.", ephemeral=True)
+        return
+    if montant <= 0:
+        await interaction.response.send_message("Le montant doit être positif.", ephemeral=True)
+        return
+    data = get_user_data(interaction.user.id)
+    if data["bank"] < montant:
+        await interaction.response.send_message("Vous n'avez pas assez d'argent en banque.", ephemeral=True)
+        return
+    data["bank"] -= montant
+    data["pocket"] += montant
+    set_user_data(interaction.user.id, pocket=data["pocket"], bank=data["bank"])
+    await interaction.response.send_message(f"Vous avez retiré {montant}€ de la banque. Nouveau solde en poche : {data['pocket']}€, banque : {data['bank']}€.")
+
+@banque.command(name="argent", description="Voir l'argent d'un autre membre")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+@app_commands.describe(membre="Le membre à consulter")
+async def banque_argent(interaction: discord.Interaction, membre: discord.Member):
+    if not in_command_category(interaction):
+        await interaction.response.send_message("Cette commande est réservée aux salons de la catégorie Casino.", ephemeral=True)
+        return
+    if not has_casino_role(interaction):
+        await interaction.response.send_message("Vous n'avez pas le rôle Casino.", ephemeral=True)
+        return
+    data = get_user_data(membre.id)
+    embed = discord.Embed(title=f"Argent de {membre.display_name}", color=discord.Color.blue())
+    embed.add_field(name="Poche", value=f"{data['pocket']}€", inline=True)
+    embed.add_field(name="Banque", value=f"{data['bank']}€", inline=True)
+    embed.add_field(name="Total", value=f"{data['pocket'] + data['bank']}€", inline=False)
+    await interaction.response.send_message(embed=embed)
+
+@banque.command(name="classement", description="Classement des plus riches du serveur")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.default_permissions()
+async def banque_classement(interaction: discord.Interaction):
+    if not in_command_category(interaction):
+        await interaction.response.send_message("Cette commande est réservée aux salons de la catégorie Casino.", ephemeral=True)
+        return
+    if not has_casino_role(interaction):
+        await interaction.response.send_message("Vous n'avez pas le rôle Casino.", ephemeral=True)
+        return
+    # Trier par total (pocket + bank)
+    sorted_users = sorted(economy.items(), key=lambda x: x[1]["pocket"] + x[1]["bank"], reverse=True)
+    embed = discord.Embed(title="🏆 Classement des plus riches", color=discord.Color.gold())
+    description = ""
+    for i, (user_id, data) in enumerate(sorted_users[:10], 1):
+        member = interaction.guild.get_member(int(user_id))
+        if member:
+            name = member.display_name
+        else:
+            name = f"Utilisateur inconnu ({user_id})"
+        total = data["pocket"] + data["bank"]
+        description += f"{i}. {name} : {total}€\n"
+    if not description:
+        description = "Aucun joueur enregistré."
+    embed.description = description
+    await interaction.response.send_message(embed=embed)
