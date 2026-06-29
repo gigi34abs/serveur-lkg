@@ -361,3 +361,50 @@ async def argent_voler(interaction: discord.Interaction, membre: discord.Member,
         voleur_data["pocket"] -= montant
         set_user_data(interaction.user.id, pocket=voleur_data["pocket"])
         await interaction.response.send_message(f"❌ Échec ! Vous avez perdu {montant}€ en tentant de voler {membre.mention}.")
+
+# ================= PARTIE 5 =================
+# Système de giveaway automatique
+
+giveaway_running = False
+
+@tasks.loop(minutes=30)
+async def giveaway_loop():
+    now = datetime.now()
+    # Entre 14h et 20h (heure locale du bot)
+    if not (14 <= now.hour < 20):
+        return
+    channel = bot.get_channel(GIVEAWAY_CHANNEL_ID)
+    if channel is None:
+        return
+    # Vérifier qu'un giveaway n'est pas déjà en cours
+    global giveaway_running
+    if giveaway_running:
+        return
+    giveaway_running = True
+    try:
+        # Message de giveaway
+        embed = discord.Embed(
+            title="🎉 Giveaway automatique !",
+            description="Réagissez avec 🎉 pour participer !\nTirage dans 10 minutes.\nGain : **500€**",
+            color=discord.Color.purple()
+        )
+        msg = await channel.send(embed=embed)
+        await msg.add_reaction("🎉")
+        await asyncio.sleep(600)  # 10 minutes
+        # Récupérer les réactions
+        msg = await channel.fetch_message(msg.id)
+        users = []
+        async for user in msg.reactions[0].users():
+            if not user.bot:
+                users.append(user)
+        if users:
+            winner = random.choice(users)
+            # Ajouter 500€ en poche
+            data = get_user_data(winner.id)
+            data["pocket"] += 500
+            set_user_data(winner.id, pocket=data["pocket"])
+            await channel.send(f"🎉 Félicitations {winner.mention} ! Vous avez gagné 500€ !")
+        else:
+            await channel.send("Personne n'a participé, dommage !")
+    finally:
+        giveaway_running = False
