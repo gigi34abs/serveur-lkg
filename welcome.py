@@ -6,7 +6,13 @@ import asyncio
 # CONFIG
 # =========================================================
 
-PING_CHANNEL_ID = 1496204414216835072 1476242905705218182
+# Salons où envoyer le ping (mention) puis supprimer
+PING_CHANNEL_IDS = [
+    1496204414216835072,
+    1476242905705218182
+]
+
+# Salon où envoyer le message de bienvenue stylé
 WELCOME_CHANNEL_ID = 1495350639419592825
 
 # =========================================================
@@ -28,59 +34,98 @@ class Welcome(commands.Cog):
         try:
 
             # =============================================
-            # PING CHANNEL
+            # PING DANS LES SALONS CONCERNÉS
             # =============================================
 
-            ping_channel = self.bot.get_channel(
-                PING_CHANNEL_ID
-            )
-
-            if ping_channel:
-
-                ping_message = await ping_channel.send(
-                    f"{member.mention}"
-                )
-
-                # DELETE AFTER 10 SEC
-
-                await asyncio.sleep(10)
-
-                try:
-                    await ping_message.delete()
-                except:
-                    pass
+            for channel_id in PING_CHANNEL_IDS:
+                channel = self.bot.get_channel(channel_id)
+                if channel:
+                    ping_message = await channel.send(
+                        f"{member.mention}"
+                    )
+                    # Supprimer après 10 secondes
+                    await asyncio.sleep(10)
+                    try:
+                        await ping_message.delete()
+                    except:
+                        pass
 
             # =============================================
-            # WELCOME CHANNEL
+            # MESSAGE DE BIENVENUE STYLÉ
             # =============================================
 
-            welcome_channel = self.bot.get_channel(
-                WELCOME_CHANNEL_ID
-            )
+            welcome_channel = self.bot.get_channel(WELCOME_CHANNEL_ID)
 
             if welcome_channel:
 
+                # Création d'un embed très chic
                 embed = discord.Embed(
+                    title="✨ **BIENVENUE SUR LE SERVEUR LKG** ✨",
                     description=(
-                        f"╔══════════════════╗\n"
-                        f"   🎉 **BIENVENUE SUR LKG** 🎉\n"
-                        f"╚══════════════════╝\n\n"
-                        f"👋 Hey {member.mention} !\n\n"
-                        f"💬 Dites lui bienvenue dans le serveur !\n"
-                        f"✨ Nous espérons que tu passeras un bon moment ici."
+                        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        "🎉 **Nous sommes ravis de t'accueillir !** 🎉\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                        f"👋 **Hey {member.mention} !**\n\n"
+                        "🌟 **Tu fais désormais partie de la famille LKG !**\n"
+                        "💬 N'hésite pas à te présenter et à discuter avec nous.\n"
+                        "🎮 Ici, on partage, on s'amuse et on respecte tout le monde.\n\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                     ),
-                    color=discord.Color.blurple()
+                    color=discord.Color.from_rgb(255, 215, 0)  # Or brillant
                 )
 
+                # Ajout de champs décoratifs
+                embed.add_field(
+                    name="📌 **RÈGLES À RESPECTER**",
+                    value=(
+                        "• Reste courtois et respectueux\n"
+                        "• Pas de spam ni de publicité\n"
+                        "• Utilise les salons appropriés\n"
+                        "• Amuse-toi bien !"
+                    ),
+                    inline=False
+                )
+
+                embed.add_field(
+                    name="🎮 **ACTIVITÉS**",
+                    value=(
+                        "• Parties en vocal\n"
+                        "• Jeux concours\n"
+                        "• Giveaways réguliers\n"
+                        "• Événements exclusifs"
+                    ),
+                    inline=True
+                )
+
+                embed.add_field(
+                    name="👥 **COMMUNAUTÉ**",
+                    value=(
+                        f"• {len(member.guild.members)} membres actifs\n"
+                        "• Entraide et bonne humeur\n"
+                        "• Staff à l'écoute"
+                    ),
+                    inline=True
+                )
+
+                # Mini-bannière (image) – RETIRÉE
+                # embed.set_image(
+                #     url="https://i.imgur.com/6Z8d5XW.png"
+                # )
+
+                # Avatar du membre en miniature
                 embed.set_thumbnail(
                     url=member.display_avatar.url
                 )
 
+                # Pied de page avec heure et nom
                 embed.set_footer(
-                    text=f"{member.name} vient de rejoindre le serveur"
+                    text=f"🎊 {member.name} a rejoint le serveur • {discord.utils.utcnow().strftime('%d/%m/%Y à %H:%M')}",
+                    icon_url=member.guild.icon.url if member.guild.icon else None
                 )
 
+                # Envoi du message
                 await welcome_channel.send(
+                    content=f"🎉 **{member.mention}** 🎉",
                     embed=embed
                 )
 
